@@ -1,0 +1,2919 @@
+# -*- coding: utf-8 -*-
+"""
+Builder script for the master photorealistic interactive 3D Smart Glove viewer.
+Updates:
+1. Stand removed - glove floats freely in 3D studio space.
+2. Glove oriented vertically upright: fingers extending UP (+Y), wrist at bottom (-Y), dorsal face with ESP32 & sensors facing forward (+Z).
+3. Smooth gesture animation transitions between finger poses.
+4. Interactive 'Orientation: Vertical / Flat' toggle button in top navigation bar.
+5. Camera presets calibrated for vertical presentation framing.
+"""
+import os
+import shutil
+
+html_content = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT-Based Smart Sign-Language Recognition Glove</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0b0f17;--panel:#121824;--panel-card:#192233;--panel-card-hover:#222f46;
+  --border:#1e293b;--border-bright:#334155;--text:#f8fafc;--muted:#94a3b8;
+  --accent:#38bdf8;--accent-glow:rgba(56,189,248,0.25);
+  --amber:#f59e0b;--amber-glow:rgba(245,158,11,0.2);
+  --green:#10b981;--green-glow:rgba(16,185,129,0.2);
+  --red:#ef4444;--purple:#a855f7;--blue:#3b82f6;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+@media(prefers-color-scheme:light){
+  :root{
+    --bg:#f1f5f9;--panel:#ffffff;--panel-card:#f8fafc;--panel-card-hover:#e2e8f0;
+    --border:#cbd5e1;--border-bright:#94a3b8;--text:#0f172a;--muted:#64748b;
+  }
+}
+body{
+  background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  overflow:hidden;width:100vw;height:100vh;display:flex;flex-direction:column;user-select:none;
+}
+#app{display:flex;flex:1;overflow:hidden;position:relative}
+#canvasWrap{flex:1;position:relative;background:radial-gradient(circle at 50% 40%,#1a2436 0%,#090d14 100%)}
+canvas{display:block;width:100%!important;height:100%!important;outline:none}
+
+/* Top Navigation Bar */
+#topBar{
+  height:48px;background:var(--panel);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 14px;gap:8px;flex-shrink:0;z-index:20;
+}
+.brandWrap{display:flex;flex-direction:column;margin-right:6px}
+.brandTitle{font-size:13px;font-weight:700;letter-spacing:-0.2px;display:flex;align-items:center;gap:6px}
+.brandBadge{
+  font-size:9px;background:rgba(56,189,248,0.12);color:var(--accent);
+  border:1px solid rgba(56,189,248,0.3);padding:1px 5px;border-radius:4px;font-weight:700;
+}
+.brandSub{font-size:10px;color:var(--muted);letter-spacing:0.2px}
+.sep{width:1px;height:24px;background:var(--border);margin:0 4px}
+.navGroup{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow-x:auto}
+.btn{
+  background:var(--panel-card);border:1px solid var(--border);color:var(--text);
+  padding:5px 9px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;transition:all 0.15s ease;white-space:nowrap;
+}
+.btn:hover{background:var(--panel-card-hover);border-color:var(--border-bright);color:var(--accent)}
+.btn.active{background:rgba(56,189,248,0.15);border-color:var(--accent);color:var(--accent);box-shadow:0 0 10px var(--accent-glow)}
+.btn.amber.active{background:rgba(245,158,11,0.15);border-color:var(--amber);color:var(--amber)}
+.btn.green.active{background:rgba(16,185,129,0.15);border-color:var(--green);color:var(--green)}
+.btn.red{border-color:rgba(239,68,68,0.4);color:var(--red)}
+.btn.red.active{background:rgba(239,68,68,0.18);border-color:var(--red);color:var(--red)}
+.btn svg{width:12px;height:12px;stroke-width:2.2}
+
+/* Canvas HUD overlays */
+#hudOverlay{
+  position:absolute;top:12px;left:14px;pointer-events:none;z-index:10;
+  display:flex;flex-direction:column;gap:6px;
+}
+.hudCard{
+  background:rgba(15,23,42,0.85);backdrop-filter:blur(8px);
+  border:1px solid var(--border);border-radius:8px;padding:8px 12px;
+  font-size:11px;box-shadow:0 4px 16px rgba(0,0,0,0.4);
+}
+.hudRow{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.hudLabel{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.5px}
+.hudVal{font-family:var(--mono);font-weight:700;color:var(--accent)}
+
+/* Tooltip */
+#tooltip{
+  position:absolute;display:none;background:rgba(11,15,23,0.92);backdrop-filter:blur(8px);
+  border:1px solid var(--accent);color:var(--text);padding:6px 10px;border-radius:6px;
+  font-size:11px;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,0.6);
+}
+#tooltip .tTitle{font-weight:700;color:var(--accent)}
+#tooltip .tHint{font-size:9px;color:var(--muted);margin-top:2px}
+
+/* Right Sidebar */
+#sidebar{
+  width:360px;background:var(--panel);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;transition:width 0.25s ease;
+  z-index:15;
+}
+#sidebar.collapsed{width:0;border:none}
+#sidebarToggle{
+  position:absolute;right:360px;top:50%;transform:translateY(-50%);width:20px;height:48px;
+  background:var(--panel);border:1px solid var(--border);border-right:none;border-radius:6px 0 0 6px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--accent);
+  z-index:16;transition:right 0.25s ease;
+}
+#sidebar.collapsed~#sidebarToggle{right:0}
+#sidebarToggle svg{width:14px;height:14px}
+
+/* Sidebar Tab Strip */
+.tabStrip{
+  display:flex;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.1);padding:4px 8px;gap:4px;
+}
+.tabBtn{
+  flex:1;background:transparent;border:none;color:var(--muted);padding:6px 4px;font-size:10px;
+  font-weight:700;text-transform:uppercase;letter-spacing:0.4px;border-radius:4px;cursor:pointer;
+  transition:all 0.15s ease;
+}
+.tabBtn:hover{color:var(--text);background:rgba(255,255,255,0.04)}
+.tabBtn.active{color:var(--accent);background:var(--panel-card);border-bottom:2px solid var(--accent)}
+
+/* Tab Panes */
+.tabPane{flex:1;overflow-y:auto;padding:12px;display:none;flex-direction:column;gap:14px}
+.tabPane.active{display:flex}
+
+/* Card Boxes */
+.card{
+  background:var(--panel-card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;
+}
+.cardHeader{
+  font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.6px;
+  margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;
+}
+.cardBadge{
+  font-size:9px;background:rgba(56,189,248,0.12);color:var(--accent);padding:1px 5px;
+  border-radius:4px;border:1px solid rgba(56,189,248,0.3);text-transform:none;letter-spacing:0;
+}
+
+/* Component Inspector Details */
+#compTitle{font-size:15px;font-weight:700;color:var(--text);margin-bottom:2px}
+#compSub{font-size:10px;color:var(--muted);margin-bottom:8px}
+#compRole{font-size:11px;line-height:1.45;color:var(--text);margin-bottom:10px}
+.specTable{width:100%;font-size:10px;border-collapse:collapse}
+.specTable tr{border-bottom:1px solid rgba(255,255,255,0.05)}
+.specTable td{padding:4px 0}
+.specTable .k{color:var(--muted);width:38%}
+.specTable .v{font-family:var(--mono);font-weight:600;color:var(--text)}
+
+/* Quick Component Selector Buttons */
+.compGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}
+.compPill{
+  background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:4px;
+  padding:4px 6px;font-size:9px;font-weight:600;cursor:pointer;text-align:center;color:var(--muted);
+  transition:all 0.15s ease;
+}
+.compPill:hover{border-color:var(--accent);color:var(--accent)}
+.compPill.active{background:rgba(56,189,248,0.15);border-color:var(--accent);color:var(--accent)}
+
+/* Finger Slider Controls */
+.sliderItem{margin-bottom:8px}
+.sliderTop{display:flex;justify-content:space-between;align-items:center;font-size:10px;margin-bottom:3px}
+.sliderName{font-weight:700;color:var(--text)}
+.sliderData{font-family:var(--mono);color:var(--accent);font-size:10px}
+.rangeSlider{
+  -webkit-appearance:none;appearance:none;width:100%;height:4px;background:var(--border);
+  border-radius:2px;outline:none;cursor:pointer;
+}
+.rangeSlider::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--panel);cursor:pointer;box-shadow:0 0 6px var(--accent-glow);
+}
+
+/* ADC Live Readout Table */
+.adcTable{width:100%;font-size:9.5px;border-collapse:collapse;margin-top:4px}
+.adcTable th{text-align:left;color:var(--muted);padding:3px 4px;border-bottom:1px solid var(--border)}
+.adcTable td{padding:3px 4px;font-family:var(--mono);border-bottom:1px solid rgba(255,255,255,0.03)}
+
+/* 10 FSL Gestures Grid */
+.gestGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.gestBtn{
+  background:var(--panel-card);border:1px solid var(--border);border-radius:6px;padding:8px 6px;
+  cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:2px;transition:all 0.15s ease;
+}
+.gestBtn:hover{border-color:var(--amber);background:rgba(245,158,11,0.06)}
+.gestBtn.active{border-color:var(--amber);background:rgba(245,158,11,0.15);box-shadow:0 0 8px var(--amber-glow)}
+.gestName{font-size:11px;font-weight:700;color:var(--text)}
+.gestSub{font-size:9px;color:var(--muted)}
+.gestPin{font-size:8px;font-family:var(--mono);color:var(--amber);margin-top:2px}
+.ttsControls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ttsControls .btn{flex:1}
+.ttsStatus{font-size:10px;color:var(--muted);line-height:1.4}
+.fitNote{font-size:10px;color:var(--text);line-height:1.45}
+.safetyList{padding-left:16px;color:var(--text);font-size:10px;line-height:1.5}
+.safetyList li+li{margin-top:5px}
+
+/* TinyML Serial Monitor */
+.consoleWrap{
+  background:#05080f;border:1px solid var(--border);border-radius:6px;padding:8px;
+  font-family:var(--mono);font-size:9.5px;height:140px;overflow-y:auto;display:flex;
+  flex-direction:column;gap:2px;color:#a5b4fc;
+}
+.logLine{line-height:1.35;word-break:break-all}
+.logLine.t{color:var(--green)}
+.logLine.w{color:var(--amber)}
+.logLine.e{color:var(--red)}
+.logLine.u{color:var(--accent)}
+
+/* Layer Toggles */
+.layerRow{display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:11px}
+.switchLabel{display:flex;align-items:center;gap:6px;cursor:pointer}
+.chkBox{accent-color:var(--accent);width:14px;height:14px;cursor:pointer}
+
+/* Scrollbar styling */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--border-bright)}
+</style>
+<script src="./assets/three.min.js"></script>
+<script src="./assets/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="topBar">
+  <div class="brandWrap">
+    <div class="brandTitle">
+      <span>SMART SIGN GLOVE</span>
+      <span class="brandBadge">LEFT HAND</span>
+    </div>
+    <div class="brandSub">IoT FSL glove | Adjustable forearm pod concept</div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- Camera Presets matching reference image panels -->
+  <div class="navGroup">
+    <button class="btn active" id="btnViewHero" onclick="setView('hero')">Hero 3D</button>
+    <button class="btn" id="btnViewDorsal" onclick="setView('dorsal')" title="Top Dorsal (Panel 1)">1. Dorsal</button>
+    <button class="btn" id="btnViewPalm" onclick="setView('palm')" title="Palm View (Panel 2)">2. Palm</button>
+    <button class="btn" id="btnViewThumb" onclick="setView('thumb')" title="Lateral Thumb (Panel 3)">3. Thumb</button>
+    <button class="btn" id="btnViewPinky" onclick="setView('pinky')" title="Lateral Pinky (Panel 4)">4. Pinky</button>
+    <button class="btn" id="btnViewFingertips" onclick="setView('fingertips')" title="Fingertip View (Panel 5)">5. Tips</button>
+    <button class="btn" id="btnViewWrist" onclick="setView('wrist')" title="Wrist View (Panel 6)">6. Wrist</button>
+    <button class="btn" id="btnViewMCU" onclick="setView('mcu')">MCU Macro</button>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- Interactive Action Buttons -->
+  <div class="navGroup">
+    <button class="btn active" id="btnOrient" onclick="toggleOrientation()" title="Toggle Vertical Upright / Flat Mode">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2v20M2 12h20"/></svg>
+      Pose: Vertical
+    </button>
+    <button class="btn" id="btnExplode" onclick="toggleExplode()" title="Exploded Assembly View">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 8l8-4 8 4-8 4-8-4zm0 8l8 4 8-4M4 12l8 4 8-4"/></svg>
+      Explode
+    </button>
+    <button class="btn" id="btnSignal" onclick="cycleSignalMode()" title="Filter Circuit Signal Paths">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      Signals: All
+    </button>
+    <button class="btn green active" id="btnPower" onclick="togglePower()" title="Hardware Slide Switch">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10"/></svg>
+      Power: ON
+    </button>
+    <button class="btn" id="btnMode" onclick="toggleMode()" title="Offline TinyML vs Online Wi-Fi">
+      Mode: Offline
+    </button>
+  </div>
+</div>
+
+<div id="app">
+  <div id="canvasWrap">
+    <!-- Canvas HUD -->
+    <div id="hudOverlay">
+      <div class="hudCard">
+        <div class="hudRow">
+          <span class="hudLabel">Gesture:</span>
+          <span class="hudVal" id="hudGesture">Kamusta (Hello)</span>
+        </div>
+        <div class="hudRow">
+          <span class="hudLabel">Output Mode:</span>
+          <span class="hudVal" id="hudConf">Preset demo</span>
+        </div>
+        <div class="hudRow">
+          <span class="hudLabel">IMU Tilt:</span>
+          <span class="hudVal" id="hudIMU">P: 12° | R: -4°</span>
+        </div>
+        <div class="hudRow" style="margin-bottom:0">
+          <span class="hudLabel">Power Rail:</span>
+          <span class="hudVal" id="hudPower" style="color:var(--green)">5.02V (MT3608)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hover tooltip -->
+    <div id="tooltip">
+      <div class="tTitle" id="tTitle">Component Name</div>
+      <div class="tHint">Click to inspect hardware specs</div>
+    </div>
+  </div>
+
+  <!-- Right Sidebar -->
+  <div id="sidebar">
+    <div class="tabStrip">
+      <button class="tabBtn active" onclick="switchTab('tabInspect')">Hardware</button>
+      <button class="tabBtn" onclick="switchTab('tabSensors')">Sensors & ADC</button>
+      <button class="tabBtn" onclick="switchTab('tabGestures')">10 Gestures</button>
+      <button class="tabBtn" onclick="switchTab('tabLayers')">Layers</button>
+    </div>
+
+    <!-- TAB 1: Hardware Component Inspector -->
+    <div id="tabInspect" class="tabPane active">
+      <div class="card">
+        <div class="cardHeader">
+          <span>Component Inspector</span>
+          <span class="cardBadge" id="compBadge">BOM: 1 pc</span>
+        </div>
+        <div id="compTitle">ESP32 DevKit V1</div>
+        <div id="compSub">Master Microcontroller & TinyML Engine</div>
+        <div id="compRole">Central computation unit running an on-device TensorFlow Lite Micro neural network. Reads 5 flex sensors via ADC1 and MPU-6050 over I2C, then sends command bytes to DFPlayer Mini over UART2.</div>
+        <table class="specTable" id="specTable">
+          <!-- Dynamically populated -->
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="cardHeader">Wearable Fit Concept</div>
+        <div class="fitNote">
+          Stretch-knit glove, low-profile finger sensors, secured dorsal leads, and a removable lightweight pod with a vented cover. Shell target: about 20–30 g, unverified. Concept only: verify fit, clearances, insulation, and battery protection before wearing.
+        </div>
+      </div>
+
+      <div class="card" role="note" aria-label="User safety precautions">
+        <div class="cardHeader">
+          <span>Safety Before Wearing</span>
+          <span class="cardBadge">Prototype</span>
+        </div>
+        <ul class="safetyList">
+          <li>This is an untested concept, not a safety-rated or medical device. Inspect wiring, insulation, enclosure, and temperature before wearing.</li>
+          <li>Use a protected LiPo and compatible charger. Do not wear it while charging; charge on a nonflammable surface while attended. Stop using a swollen, damaged, hot, or unusual-smelling battery.</li>
+          <li>Keep electronics dry. Turn off and unplug the pod before cleaning; remove the electronics before washing the glove.</li>
+          <li>Keep straps loose enough for normal circulation and movement. Remove the glove immediately if it causes heat, pain, numbness, or skin irritation.</li>
+          <li>Do not use it near exposed water, moving machinery, or where a malfunction could create danger. Keep batteries and small parts away from children.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="cardHeader">Quick Hardware Selector</div>
+        <div class="compGrid">
+          <div class="compPill active" onclick="selectComponent('esp32')">ESP32 MCU</div>
+          <div class="compPill" onclick="selectComponent('mpu6050')">MPU-6050</div>
+          <div class="compPill" onclick="selectComponent('flex')">5x Flex</div>
+          <div class="compPill" onclick="selectComponent('mt3608')">MT3608 Boost</div>
+          <div class="compPill" onclick="selectComponent('dfplayer')">DFPlayer</div>
+          <div class="compPill" onclick="selectComponent('speaker')">8Ω Speaker</div>
+          <div class="compPill" onclick="selectComponent('battery')">3.7V LiPo</div>
+          <div class="compPill" onclick="selectComponent('tp4056')">TP4056 USB</div>
+          <div class="compPill" onclick="selectComponent('switch')">Power Switch</div>
+          <div class="compPill" onclick="selectComponent('mount')">Mount Plate</div>
+          <div class="compPill" onclick="selectComponent('enclosure')">Lightweight Pod</div>
+          <div class="compPill" onclick="selectComponent('resistors')">Divider Res</div>
+          <div class="compPill" onclick="selectComponent('statusLed')">Status LED</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardHeader">Gesture Demo Console</div>
+        <div class="consoleWrap" id="serialConsole">
+          <div class="logLine t">[DEMO] Built-in gesture presets loaded.</div>
+          <div class="logLine u">[TTS] Speech uses browser-provided voices.</div>
+          <div class="logLine">[INFO] No live classifier is connected in this viewer.</div>
+          <div class="logLine t">[READY] Select a gesture preset to preview its output.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: Sensors & ADC Live Dashboard -->
+    <div id="tabSensors" class="tabPane">
+      <div class="card">
+        <div class="cardHeader">
+          <span>5-Finger Joint Bend Controls</span>
+          <span class="cardBadge">0° - 90° Flexion</span>
+        </div>
+
+        <!-- Thumb Slider -->
+        <div class="sliderItem">
+          <div class="sliderTop">
+            <span class="sliderName">Thumb (GPIO 36 / VP)</span>
+            <span class="sliderData" id="sValThumb">0° | 25.0kΩ</span>
+          </div>
+          <input type="range" class="rangeSlider" id="rngThumb" min="0" max="90" value="0" oninput="onSliderBend(0, this.value)">
+        </div>
+
+        <!-- Index Slider -->
+        <div class="sliderItem">
+          <div class="sliderTop">
+            <span class="sliderName">Index (GPIO 39 / VN)</span>
+            <span class="sliderData" id="sValIndex">0° | 25.0kΩ</span>
+          </div>
+          <input type="range" class="rangeSlider" id="rngIndex" min="0" max="90" value="0" oninput="onSliderBend(1, this.value)">
+        </div>
+
+        <!-- Middle Slider -->
+        <div class="sliderItem">
+          <div class="sliderTop">
+            <span class="sliderName">Middle (GPIO 34)</span>
+            <span class="sliderData" id="sValMiddle">0° | 25.0kΩ</span>
+          </div>
+          <input type="range" class="rangeSlider" id="rngMiddle" min="0" max="90" value="0" oninput="onSliderBend(2, this.value)">
+        </div>
+
+        <!-- Ring Slider -->
+        <div class="sliderItem">
+          <div class="sliderTop">
+            <span class="sliderName">Ring (GPIO 35)</span>
+            <span class="sliderData" id="sValRing">0° | 25.0kΩ</span>
+          </div>
+          <input type="range" class="rangeSlider" id="rngRing" min="0" max="90" value="0" oninput="onSliderBend(3, this.value)">
+        </div>
+
+        <!-- Pinky Slider -->
+        <div class="sliderItem">
+          <div class="sliderTop">
+            <span class="sliderName">Pinky (GPIO 32)</span>
+            <span class="sliderData" id="sValPinky">0° | 25.0kΩ</span>
+          </div>
+          <input type="range" class="rangeSlider" id="rngPinky" min="0" max="90" value="0" oninput="onSliderBend(4, this.value)">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardHeader">Live 12-Bit ADC Voltage Divider Readout</div>
+        <table class="adcTable" id="adcTable">
+          <thead>
+            <tr><th>Finger</th><th>GPIO</th><th>R_flex</th><th>V_out</th><th>ADC (12b)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Thumb</td><td>36(VP)</td><td id="adcR0">25.0 kΩ</td><td id="adcV0">0.94 V</td><td id="adcRaw0" style="color:var(--accent)">1170</td></tr>
+            <tr><td>Index</td><td>39(VN)</td><td id="adcR1">25.0 kΩ</td><td id="adcV1">0.94 V</td><td id="adcRaw1" style="color:var(--accent)">1170</td></tr>
+            <tr><td>Middle</td><td>34</td><td id="adcR2">25.0 kΩ</td><td id="adcV2">0.94 V</td><td id="adcRaw2" style="color:var(--accent)">1170</td></tr>
+            <tr><td>Ring</td><td>35</td><td id="adcR3">25.0 kΩ</td><td id="adcV3">0.94 V</td><td id="adcRaw3" style="color:var(--accent)">1170</td></tr>
+            <tr><td>Pinky</td><td>32</td><td id="adcR4">25.0 kΩ</td><td id="adcV4">0.94 V</td><td id="adcRaw4" style="color:var(--accent)">1170</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 3: 10 FSL Gestures -->
+    <div id="tabGestures" class="tabPane">
+      <div class="card">
+        <div class="cardHeader">
+          <span>10 Filipino Sign Language Gestures</span>
+          <span class="cardBadge">Gesture & Speech Demo</span>
+        </div>
+        <div class="gestGrid" id="gestGrid">
+          <!-- Dynamically populated 10 gestures -->
+        </div>
+      </div>
+      <div class="card">
+        <div class="cardHeader">
+          <span>Text-to-Speech Output</span>
+          <span class="cardBadge">Offline + Neural</span>
+        </div>
+        <div class="ttsControls">
+          <select class="btn" id="ttsLanguage" aria-label="Speech language" onchange="updateTtsVoices()">
+            <option value="fil-PH">Filipino</option>
+            <option value="en-PH">English</option>
+          </select>
+          <button class="btn" id="speakCurrentGesture" onclick="speakCurrentGesture()">Speak Current Gesture</button>
+        </div>
+        <label class="layerRow">Voice engine
+          <select class="btn" id="ttsEngine" aria-label="Voice engine" onchange="updateTtsEngine()">
+            <option value="device">Device voice (offline)</option>
+            <option value="azure">Filipino neural voice (online)</option>
+          </select>
+        </label>
+        <label class="layerRow" id="deviceVoiceRow">Device voice
+          <select class="btn" id="ttsVoice" aria-label="Speech voice" onchange="updateTtsVoices()"></select>
+        </label>
+        <label class="layerRow" id="onlineVoiceRow" style="display:none">Filipino neural voice
+          <select class="btn" id="onlineVoice" aria-label="Filipino neural voice"></select>
+        </label>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="autoSpeak" checked> Auto-speak when a gesture is selected</label>
+        </div>
+        <div class="ttsStatus" id="ttsStatus" role="status" aria-live="polite">
+          Speech uses voices available in your browser or operating system.
+        </div>
+        <div class="ttsStatus">
+          Online mode sends the selected phrase to Azure Speech. It needs a Speech resource key and region configured on the local server.
+          Start it with <code>python serve_app.py</code>, then open <code>http://127.0.0.1:8000</code>.
+        </div>
+        <div class="cardHeader" style="margin-top:12px">Sign Vocabulary</div>
+        <div class="ttsControls">
+          <select class="btn" id="vocabEntry" aria-label="Choose a sign to edit" onchange="loadVocabularyEntry()"></select>
+          <button class="btn" type="button" onclick="addVocabularyEntry()">Add New Sign</button>
+        </div>
+        <label class="layerRow">Sign / Filipino word
+          <input class="btn" id="vocabName" type="text" maxlength="60">
+        </label>
+        <label class="layerRow">English meaning
+          <input class="btn" id="vocabEnglish" type="text" maxlength="100">
+        </label>
+        <label class="layerRow">ML class label
+          <input class="btn" id="vocabClassLabel" type="text" maxlength="60">
+        </label>
+        <label class="layerRow">Filipino speech phrase
+          <input class="btn" id="vocabFilipinoSpeech" type="text" maxlength="160">
+        </label>
+        <label class="layerRow">English speech phrase
+          <input class="btn" id="vocabEnglishSpeech" type="text" maxlength="160">
+        </label>
+        <div class="ttsControls">
+          <button class="btn" type="button" onclick="saveVocabularyEntry()">Save Sign Vocabulary</button>
+        </div>
+        <div class="ttsStatus" id="vocabStatus" role="status" aria-live="polite">
+          Edit or add sign-to-word mappings. New entries are saved in this browser.
+        </div>
+        <div class="ttsStatus">
+          No live ML model is connected yet. Match each ML class label exactly to map its prediction to speech.
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: Layer Visibility -->
+    <div id="tabLayers" class="tabPane">
+      <div class="card">
+        <div class="cardHeader">Hardware Layer Toggles</div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkGlove" checked onchange="toggleLayer('glove', this.checked)"> Knitted Glove Hand</label>
+        </div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkSensors" checked onchange="toggleLayer('sensors', this.checked)"> 5x Flex Sensor Strips</label>
+        </div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkMount" checked onchange="toggleLayer('mount', this.checked)"> 3D Mount Plate</label>
+        </div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkEnclosure" checked onchange="toggleLayer('enclosure', this.checked)"> Lightweight Pod Enclosure (Demo)</label>
+        </div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkComps" checked onchange="toggleLayer('components', this.checked)"> Electronic Modules (ESP32, IMU, etc.)</label>
+        </div>
+        <div class="layerRow">
+          <label class="switchLabel"><input type="checkbox" class="chkBox" id="chkWiring" checked onchange="toggleLayer('wiring', this.checked)"> Wiring Harness & Tape</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sidebarToggle" onclick="toggleSidebar()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18l6-6-6-6"/></svg>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONSTANTS & HARDWARE DOCUMENTATION SPECIFICATIONS
+// ============================================================
+const COMP_DATA = {
+  'esp32': {
+    name: 'ESP32 DevKit V1 (ESP-WROOM-32)',
+    sub: 'Master Microcontroller & TinyML Classification Engine',
+    role: 'Central computation node running an on-device TensorFlow Lite Micro neural network classifier. Reads 5 flex sensors exclusively on ADC1 (channels on ADC2 are disabled during Wi-Fi operation), samples MPU-6050 over I2C, and commands DFPlayer Mini over UART2.',
+    qty: '1 unit',
+    specs: {
+      'Microcontroller': 'ESP32-WROOM-32 (Dual-Core Xtensa LX6 @ 240 MHz)',
+      'Memory': '520 KB SRAM, 4 MB SPI Flash',
+      'ADC Inputs': 'ADC1 channels: GPIO 36 (VP), 39 (VN), 34, 35, 32',
+      'I2C Bus': 'SDA = GPIO 21, SCL = GPIO 22 (Fast Mode 400kHz)',
+      'UART2 Bus': 'TX2 = GPIO 17, RX2 = GPIO 16 (DFPlayer communication)',
+      'Input Power': '5.0V via VIN pin from MT3608 boost converter',
+      'Wireless': '2.4 GHz Wi-Fi & BLE (used in Online Mode for OTA updates)'
+    }
+  },
+  'mpu6050': {
+    name: 'MPU-6050 IMU Module (GY-521 Breakout)',
+    sub: '6-DOF Inertial Measurement Unit (Gyro + Accelerometer)',
+    role: 'Measures dynamic hand orientation (pitch, roll, yaw) and motion velocity to distinguish gestures with identical finger bends but different palm orientations (e.g. "Kamusta" vs "Salamat").',
+    qty: '1 unit',
+    specs: {
+      'Sensors': '3-Axis Gyroscope (±250°/s) + 3-Axis Accelerometer (±2g)',
+      'Resolution': '16-bit analog-to-digital converters per channel',
+      'Interface': 'I2C (Address 0x68 with AD0 grounded)',
+      'Pins': 'VCC (3.3V), GND, SCL (GPIO 22), SDA (GPIO 21), INT',
+      'Placement': 'Dorsal metacarpal region between index and middle knuckles'
+    }
+  },
+  'flex': {
+    name: 'Resistive Flex Sensors (2.2 Inch / 55.9 mm)',
+    sub: '5x Carbon-Ink Polyimide Variable Resistor Strips',
+    role: 'Transduces individual finger joint bend angles into variable resistance. When flat, resistance is ~25 kΩ; bending to 90° compresses the segmented carbon trace, increasing resistance to ~100 kΩ.',
+    qty: '5 units (1 per finger)',
+    specs: {
+      'Substrate': 'Flexible Polyimide (Amber Kapton-style base)',
+      'Flat Resistance': '25.0 kΩ ± 30%',
+      'Bent Resistance (90°)': '90 kΩ - 110 kΩ',
+      'Voltage Divider': 'Forms half-bridge with 10 kΩ fixed resistor to GND',
+      'GPIO Mapping': 'Thumb: 36 (VP) | Index: 39 (VN) | Middle: 34 | Ring: 35 | Pinky: 32',
+      'Mounting': 'Transparent amber Kapton tape at ends + elastic fabric loops'
+    }
+  },
+  'mt3608': {
+    name: 'MT3608 DC-DC Step-Up Boost Converter',
+    sub: 'High-Efficiency 2A Voltage Step-Up Regulator',
+    role: 'Steps up the variable 3.0V - 4.2V lithium battery voltage to a rock-solid, regulated 5.0V supply rail, providing required headroom for ESP32 VIN and DFPlayer Mini internal audio amplifier.',
+    qty: '1 unit',
+    specs: {
+      'Input Voltage': '2.0V to 24.0V (Fed with 3.7V nominal from LiPo)',
+      'Output Voltage': 'Regulated 5.0V (Calibrated via onboard multi-turn trimpot)',
+      'Max Current': '2.0 A peak',
+      'Efficiency': 'Up to 93%',
+      'Connectors': '2-Pin blue screw terminal for secure power leads'
+    }
+  },
+  'dfplayer': {
+    name: 'DFPlayer Mini MP3 Audio Module',
+    sub: 'Hardware Audio Decoder & 3W Mono Speaker Driver',
+    role: 'Standalone audio player containing an integrated hardware DAC and 3W audio amplifier. Plays pre-recorded Filipino voice tracks (/mp3/0001.mp3 to 0010.mp3) from FAT32 microSD card upon receiving UART trigger frames.',
+    qty: '1 unit',
+    specs: {
+      'Storage': 'MicroSD card (FAT16/FAT32 formatted up to 32GB)',
+      'Audio Formats': 'MP3, WAV, WMA (24-bit DAC, 100dB dynamic range)',
+      'Communication': 'Asynchronous serial UART @ 9600 baud (RX: GPIO 17, TX: GPIO 16)',
+      'Power': '5.0V from MT3608 boost rail',
+      'Speaker Output': 'Direct differential bridge-tied load (SPK_1 / SPK_2)'
+    }
+  },
+  'speaker': {
+    name: 'Miniature Acoustic Speaker (8 Ω, 28mm)',
+    sub: 'Voice Output Transducer for Speech Vocalization',
+    role: 'Converts electrical audio signals from DFPlayer Mini into clear, audible synthesized speech for nearby hearing conversation partners, vocalizing the translated sign language gestures.',
+    qty: '1 unit',
+    specs: {
+      'Impedance': '8 Ohms',
+      'Rated Power': '0.5 W to 2.0 W max',
+      'Diameter': '28.0 mm round chassis',
+      'Grille': 'Concentric perforated sound grille with central dome',
+      'Mounting': 'Upper dorsal wrist cuff with foam acoustic cushion'
+    }
+  },
+  'battery': {
+    name: '3.7V Lithium-Polymer Pouch Battery (1200mAh)',
+    sub: 'Lightweight Rechargeable Onboard Energy Source',
+    role: 'Provides portable electrical energy for the wearable prototype, allowing untethered mobile operation for over 6-8 hours of continuous sign language recognition and voice playback.',
+    qty: '1 unit',
+    specs: {
+      'Chemistry': 'Lithium-ion Polymer (LiPo)',
+      'Nominal Voltage': '3.7 V (4.2V fully charged, 3.0V cut-off)',
+      'Capacity': '1200 mAh (4.44 Wh)',
+      'Protection': 'Integrated PCM circuit (overcharge, overdischarge, short circuit)',
+      'Placement': 'Wrist cuff dorsal section, secured with elastic strap'
+    }
+  },
+  'tp4056': {
+    name: 'TP4056 1A Li-Ion USB Charging Module',
+    sub: 'Constant-Current / Constant-Voltage Battery Charger',
+    role: 'Allows safe recharging of the 3.7V LiPo battery via standard Micro-USB or 5V power adapter. Features integrated DW01A protection IC to prevent battery drain below 2.5V.',
+    qty: '1 unit',
+    specs: {
+      'Charging Method': 'CC/CV linear charging',
+      'Charge Current': '1.0 A (set by R_prog 1.2kΩ)',
+      'Input Port': 'Micro-USB 5V socket',
+      'Status Indicators': 'Red LED (Charging) | Blue LED (Full Charge)',
+      'Safety': 'DW01A + 8205A Dual MOSFET battery protection'
+    }
+  },
+  'switch': {
+    name: 'SPDT Miniature Slide Power Switch',
+    sub: 'Hardware Main Power Rail Disconnect',
+    role: 'Cuts battery power physically to eliminate quiescent battery drain when the smart glove is stored or powered down. Accessible along the outer lateral edge of the glove.',
+    qty: '1 unit',
+    specs: {
+      'Type': 'Single Pole Double Throw (SPDT)',
+      'Current Rating': '0.5A @ 50V DC',
+      'Actuator': 'Red sliding knob with positive detent tactile feel',
+      'Location': 'Glove edge near wrist transition'
+    }
+  },
+  'mount': {
+    name: 'Low-Profile 3D Mount Plate (Black PLA)',
+    sub: 'Slim Flush Mounting Base with Strap Channels',
+    role: 'Ultra-thin, ergonomic mounting bracket (1.6mm) tailored to seat the ESP32 and perfboard securely against the dorsal glove fabric without bulky enclosure walls, matching the physical prototype photograph.',
+    qty: '1 unit',
+    specs: {
+      'Material': 'PLA / PETG (Matte Black, 0.2mm layer height)',
+      'Dimensions': '38 mm × 58 mm × 1.6 mm',
+      'Features': 'Corner Velcro mounting tabs, flush seating, open airflow',
+      'Profile': 'Ultra-slim low-profile open design'
+    }
+  },
+  'enclosure': {
+    name: 'Lightweight Removable Pod Enclosure',
+    sub: 'Vented thin-wall cover with accessible controls',
+    role: 'A shallow removable shell covers the forearm electronics while keeping the speaker grille, slide switch, status button, and charging port accessible. The mass target is an estimate for the empty shell only.',
+    qty: '1 shell',
+    specs: {
+      'Material concept': 'Thin-wall PETG or nylon; rounded edges',
+      'Envelope': 'About 92 mm × 104 mm × 22 mm',
+      'Wall target': '1.0–1.2 mm, vented cover',
+      'Empty shell target': 'About 20–30 g (design estimate; weigh the print)',
+      'Protection': 'Sweat barrier concept only; no waterproof or impact rating'
+    }
+  },
+  'resistors': {
+    name: 'Voltage Divider Fixed Resistors (10 kΩ, 1%)',
+    sub: '5x Metal Film Resistors on Perfboard Carrier',
+    role: 'Paired with each flex sensor to form 5 independent voltage dividers, converting variable flex resistance into analog voltages (0.6V to 2.4V) within the ESP32 ADC1 linear measuring range.',
+    qty: '5 units',
+    specs: {
+      'Value': '10.0 kΩ ± 1% tolerance',
+      'Power Rating': '1/4 Watt (0.25 W) axial leaded',
+      'Band Code': 'Brown - Black - Orange - Gold',
+      'Location': 'Miniature perfboard mounted beneath ESP32 header pins'
+    }
+  },
+  'statusLed': {
+    name: 'RGB Status Indicator & Tactile Push Button',
+    sub: 'System Health & Calibration User Interface',
+    role: 'Visual indicator showing real-time system state (blinking Green for offline inference, Cyan for Wi-Fi online mode, Amber during gesture capture). Tactile button triggers sensor re-zeroing.',
+    qty: '1 set',
+    specs: {
+      'LED Type': '3mm high-brightness diffused LED',
+      'Signals': 'Connected to ESP32 GPIO 2 via 330Ω current limiting resistor',
+      'Push Button': '6mm tactile momentary switch connected to GPIO 0'
+    }
+  }
+};
+
+const GESTURES = [
+  {id:'kamusta', name:'Kamusta', en:'Hello / How are you', bends:[10, 12, 10, 15, 12], pitch:12, roll:-4},
+  {id:'salamat', name:'Salamat', en:'Thank You', bends:[15, 10, 10, 12, 14], pitch:35, roll:-2},
+  {id:'oo',      name:'Oo',      en:'Yes (Nodding Fist)', bends:[80, 85, 85, 82, 80], pitch:28, roll:0},
+  {id:'hindi',   name:'Hindi',   en:'No (Index/Middle Snap)', bends:[75, 12, 15, 80, 85], pitch:8, roll:-15},
+  {id:'pakiusap',name:'Pakiusap',en:'Please (Open Palm)', bends:[5, 5, 5, 5, 5], pitch:18, roll:5},
+  {id:'pasensya',name:'Pasensya',en:'Sorry (Circling Fist)', bends:[70, 75, 75, 70, 70], pitch:45, roll:10},
+  {id:'tulong',  name:'Tulong',  en:'Help (Thumbs Up)', bends:[0, 85, 85, 85, 85], pitch:5, roll:-8},
+  {id:'tubig',   name:'Tubig',   en:'Water ("W" Handshape)', bends:[75, 8, 8, 8, 80], pitch:15, roll:-5},
+  {id:'kain',    name:'Kain',    en:'Eat (Cupped Fingers)', bends:[50, 55, 60, 55, 50], pitch:40, roll:20},
+  {id:'mahal',   name:'Mahal Kita', en:'I Love You (ILY Sign)', bends:[5, 8, 80, 80, 5], pitch:10, roll:-6}
+];
+
+const GESTURE_VOCABULARY_KEY = 'smart-glove-gesture-vocabulary-v1';
+loadGestureVocabulary();
+
+function getEnglishSpeech(gesture){
+  if(gesture.speechEn) return gesture.speechEn;
+  const defaultPhrases = {
+    kamusta: 'Hello, how are you?',
+    salamat: 'Thank you.',
+    oo: 'Yes.',
+    hindi: 'No.',
+    pakiusap: 'Please.',
+    pasensya: 'Sorry.',
+    tulong: 'Help.',
+    tubig: 'Water.',
+    kain: 'Eat.',
+    mahal: 'I love you.'
+  };
+  if(defaultPhrases[gesture.id]) return defaultPhrases[gesture.id];
+  const detailStart = gesture.en.indexOf(' ' + String.fromCharCode(40));
+  return detailStart < 0 ? gesture.en : gesture.en.slice(0, detailStart);
+}
+
+function getClassLabel(gesture){
+  return gesture.classLabel || gesture.id;
+}
+
+function setVocabularyStatus(message){
+  const status = document.getElementById('vocabStatus');
+  if(status) status.textContent = message;
+}
+
+function loadGestureVocabulary(){
+  let raw;
+  try {
+    raw = localStorage.getItem(GESTURE_VOCABULARY_KEY);
+  } catch(error) {
+    setVocabularyStatus(`Could not read saved vocabulary: ${error.message}`);
+    return;
+  }
+  if(!raw) return;
+
+  try {
+    const saved = JSON.parse(raw);
+    if(!saved || !Array.isArray(saved.entries)) throw new Error('Saved vocabulary has an invalid format.');
+    const builtinIds = new Set(GESTURES.map((gesture)=>gesture.id));
+    const seenIds = new Set();
+    const seenClassLabels = new Set();
+    const builtinUpdates = [];
+    const loadedCustom = [];
+    saved.entries.forEach((entry)=>{
+      if(!entry || typeof entry !== 'object' ||
+         !['id', 'classLabel', 'name', 'en', 'speechFil', 'speechEn'].every((key)=>typeof entry[key] === 'string')){
+        throw new Error('A saved sign entry is incomplete.');
+      }
+      const classKey = entry.classLabel.trim().toLowerCase();
+      if(!entry.id || !classKey || seenIds.has(entry.id) || seenClassLabels.has(classKey)){
+        throw new Error('Saved sign ids and ML class labels must be unique and non-empty.');
+      }
+      seenIds.add(entry.id);
+      seenClassLabels.add(classKey);
+      if(builtinIds.has(entry.id)){
+        builtinUpdates.push(entry);
+      } else if(entry.id.indexOf('custom-') === 0){
+        loadedCustom.push({
+          id: entry.id,
+          classLabel: entry.classLabel,
+          name: entry.name,
+          en: entry.en,
+          speechFil: entry.speechFil,
+          speechEn: entry.speechEn,
+          bends: [0, 0, 0, 0, 0],
+          pitch: 0,
+          roll: 0,
+          custom: true
+        });
+      } else {
+        throw new Error(`Unknown saved sign id: ${entry.id}`);
+      }
+    });
+    builtinUpdates.forEach((entry)=>{
+      const gesture = GESTURES.find((item)=>item.id === entry.id);
+      gesture.classLabel = entry.classLabel;
+      gesture.name = entry.name;
+      gesture.en = entry.en;
+      gesture.speechFil = entry.speechFil;
+      gesture.speechEn = entry.speechEn;
+    });
+    GESTURES.push(...loadedCustom);
+    setVocabularyStatus('Saved sign vocabulary loaded from this browser.');
+  } catch(error) {
+    setVocabularyStatus(`Could not load saved vocabulary: ${error.message}`);
+  }
+}
+
+function saveGestureVocabulary(){
+  const entries = GESTURES.map((gesture)=>({
+    id: gesture.id,
+    classLabel: getClassLabel(gesture),
+    name: gesture.name,
+    en: gesture.en,
+    speechFil: gesture.speechFil || gesture.name,
+    speechEn: getEnglishSpeech(gesture)
+  }));
+  try {
+    localStorage.setItem(GESTURE_VOCABULARY_KEY, JSON.stringify({entries}));
+  } catch(error) {
+    setVocabularyStatus(`Could not save vocabulary: ${error.message}`);
+    return false;
+  }
+  setVocabularyStatus('Sign vocabulary saved in this browser.');
+  return true;
+}
+
+// ============================================================
+// THREE.JS GLOBAL SETUP & STATE
+// ============================================================
+let scene, camera, renderer, controls, raycaster, mouse;
+let mainGloveGroup;
+let gloveGroup, compGroup, wireGroup, mountGroup, enclosureGroup, sensorGroup;
+let fingerJoints = []; // [{root, joints:[jNode], flexMesh, def}]
+let allInteractables = []; // [{mesh, id, pos}]
+let hoveredObj = null, selectedCompId = 'esp32';
+
+let isVertical = true; // DEFAULT VERTICAL UPRIGHT POSE: FINGERS UP, WRIST DOWN
+let targetGroupRot = {x: Math.PI / 2, y: Math.PI, z: 0};
+let targetGroupPos = {x: 0, y: -0.015, z: 0};
+
+let isExploded = false, explodeT = 0, targetExplodeT = 0;
+let isPowered = true;
+let isOnline = false;
+let currentSignalMode = 'all'; // 'all', 'power', 'sensor', 'audio'
+let activeGestureIdx = 0;
+let activeUtterance = null;
+
+// Smooth gesture animation state
+let currentBends = [0, 0, 0, 0, 0];
+let targetBends  = [0, 0, 0, 0, 0];
+const BEND_LERP_SPEED = 0.10; // Higher = faster snap, 0.10 = smooth ~300ms
+const BEND_SNAP_THRESHOLD = 0.3; // Degrees - snap to target below this
+
+let speakerMesh = null, speakerVibTimer = 0;
+let switchKnobMesh = null;
+let ledMeshes = {esp32:null, tpRed:null, tpBlue:null, status:null};
+
+const container = document.getElementById('canvasWrap');
+
+// Initialize Scene
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f17);
+
+camera = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.01, 50);
+camera.position.set(0.14, 0.08, 0.28);
+
+renderer = new THREE.WebGLRenderer({antialias:true, alpha:false, powerPreference:'high-performance'});
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+renderer.outputEncoding = THREE.sRGBEncoding;
+container.appendChild(renderer.domElement);
+
+controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.target.set(0, 0.02, 0);
+controls.maxDistance = 1.2;
+controls.minDistance = 0.06;
+
+raycaster = new THREE.Raycaster();
+mouse = new THREE.Vector2(-999, -999);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xdbeafe, 0.65));
+
+const keyLight = new THREE.DirectionalLight(0xfff8ee, 1.25);
+keyLight.position.set(0.35, 0.45, 0.55);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.near = 0.1;
+keyLight.shadow.camera.far = 2.5;
+keyLight.shadow.camera.left = -0.4;
+keyLight.shadow.camera.right = 0.4;
+keyLight.shadow.camera.top = 0.4;
+keyLight.shadow.camera.bottom = -0.4;
+keyLight.shadow.bias = -0.0003;
+scene.add(keyLight);
+
+const fillLight = new THREE.DirectionalLight(0x7dd3fc, 0.48);
+fillLight.position.set(-0.45, 0.25, -0.35);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xffedd5, 0.38);
+rimLight.position.set(0.10, 0.35, -0.50);
+scene.add(rimLight);
+
+// Studio Matte Floor
+const floorGeo = new THREE.PlaneGeometry(3, 3);
+const floorMat = new THREE.MeshStandardMaterial({color:0xd3d8e0, roughness:0.85, metalness:0.02});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.130;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Root Assembly Groups
+mainGloveGroup = new THREE.Group(); mainGloveGroup.name = 'mainGloveGroup';
+// Set initial vertical upright posture: Fingers UP (+Y), Wrist DOWN (-Y), Dorsal components facing FRONT (+Z)
+mainGloveGroup.rotation.set(Math.PI / 2, Math.PI, 0);
+mainGloveGroup.position.set(0, -0.015, 0);
+scene.add(mainGloveGroup);
+
+gloveGroup = new THREE.Group(); gloveGroup.name = 'glove';
+compGroup  = new THREE.Group(); compGroup.name  = 'components';
+wireGroup  = new THREE.Group(); wireGroup.name  = 'wiring';
+mountGroup = new THREE.Group(); mountGroup.name = 'mount';
+enclosureGroup = new THREE.Group(); enclosureGroup.name = 'enclosure';
+sensorGroup= new THREE.Group(); sensorGroup.name= 'sensors';
+
+mainGloveGroup.add(gloveGroup);
+mainGloveGroup.add(compGroup);
+mainGloveGroup.add(wireGroup);
+mainGloveGroup.add(mountGroup);
+mainGloveGroup.add(enclosureGroup);
+mainGloveGroup.add(sensorGroup);
+
+// ============================================================
+// PROCEDURAL CANVAS TEXTURE GENERATORS
+// ============================================================
+function createKnittedFabricBumpTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.2;
+  for(let y = 0; y < 256; y += 6){
+    for(let x = 0; x < 256; x += 6){
+      const off = (Math.floor(y / 6) % 2) * 3;
+      ctx.beginPath();
+      ctx.arc(x + off, y, 2.5, 0, Math.PI);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(24, 24);
+  return tex;
+}
+
+function createCuffRibbedTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, 128, 128);
+
+  for(let x = 0; x < 128; x += 4){
+    ctx.fillStyle = (x % 8 === 0) ? '#a0a0a0' : '#606060';
+    ctx.fillRect(x, 0, 4, 128);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8, 2);
+  return tex;
+}
+
+function createESP32ShieldTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 512; cv.height = 512;
+  const ctx = cv.getContext('2d');
+
+  // Brushed aluminum gradient
+  const grad = ctx.createLinearGradient(0, 0, 512, 512);
+  grad.addColorStop(0, '#d1d5db');
+  grad.addColorStop(0.5, '#e5e7eb');
+  grad.addColorStop(1, '#9ca3af');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Metal shield bevel
+  ctx.strokeStyle = '#4b5563';
+  ctx.lineWidth = 14;
+  ctx.strokeRect(10, 10, 492, 492);
+
+  // Laser silkscreen text
+  ctx.fillStyle = '#1f2937';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('ESP-WROOM-32', 256, 120);
+
+  ctx.font = '22px sans-serif';
+  ctx.fillText('Espressif Systems', 256, 165);
+
+  ctx.font = '18px monospace';
+  ctx.fillText('FCC ID: 2AC7Z-ESPWROOM32', 256, 215);
+  ctx.fillText('CE 0700  [!] RoHS', 256, 250);
+
+  // WiFi & Bluetooth icons
+  ctx.beginPath();
+  ctx.arc(256, 330, 40, Math.PI * 1.2, Math.PI * 1.8);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#1f2937';
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(256, 330, 24, Math.PI * 1.2, Math.PI * 1.8);
+  ctx.stroke();
+
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('WiFi + BT + BLE', 256, 400);
+
+  // QR Code placeholder square
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(50, 360, 90, 90);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(60, 370, 25, 25);
+  ctx.fillRect(105, 370, 25, 25);
+  ctx.fillRect(60, 415, 25, 25);
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createFlexSensorTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 512;
+  const ctx = cv.getContext('2d');
+
+  // Translucent Amber polyimide base
+  ctx.fillStyle = '#d97706';
+  ctx.fillRect(0, 0, 128, 512);
+
+  // Dark conductive bus side tracks
+  ctx.fillStyle = '#78350f';
+  ctx.fillRect(10, 30, 8, 450);
+  ctx.fillRect(110, 30, 8, 450);
+
+  // Segmented carbon resistive bars (22 segments)
+  ctx.fillStyle = '#1c1917';
+  const barCount = 22;
+  const step = 420 / barCount;
+  for(let i = 0; i < barCount; i++){
+    const y = 50 + i * step;
+    ctx.fillRect(24, y, 80, step * 0.65);
+    // Silver trace link
+    ctx.fillStyle = '#a8a29e';
+    ctx.fillRect((i % 2 === 0) ? 18 : 102, y + 2, 8, 4);
+    ctx.fillStyle = '#1c1917';
+  }
+
+  // Bottom solder ring eyelets
+  ctx.fillStyle = '#e2e8f0';
+  ctx.beginPath();
+  ctx.arc(40, 490, 12, 0, Math.PI * 2);
+  ctx.arc(88, 490, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#78350f';
+  ctx.beginPath();
+  ctx.arc(40, 490, 5, 0, Math.PI * 2);
+  ctx.arc(88, 490, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createMPU6050Texture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  // Deep blue PCB substrate
+  ctx.fillStyle = '#034575';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // White silkscreen text
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('GY-521', 30, 50);
+
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('MPU-6050', 30, 85);
+
+  // Coordinate axes arrows
+  ctx.font = '16px monospace';
+  ctx.fillText('X →', 180, 50);
+  ctx.fillText('Y ↑', 180, 80);
+  ctx.fillText('Z ⊙', 180, 110);
+
+  // Pin labels along bottom edge
+  const pins = ['VCC', 'GND', 'SCL', 'SDA', 'XDA', 'XCL', 'AD0', 'INT'];
+  ctx.font = '11px monospace';
+  pins.forEach((p, idx)=>{
+    const x = 20 + idx * 28;
+    ctx.fillText(p, x, 230);
+    // Gold ring pad
+    ctx.fillStyle = '#eab308';
+    ctx.beginPath();
+    ctx.arc(x + 10, 245, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#034575';
+    ctx.beginPath();
+    ctx.arc(x + 10, 245, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+  });
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createMT3608Texture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  // Purple PCB substrate
+  ctx.fillStyle = '#6b21a8';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText('MT3608 BOOST', 25, 45);
+
+  ctx.font = '18px monospace';
+  ctx.fillText('IN+  IN-', 30, 220);
+  ctx.fillText('OUT+ OUT-', 140, 220);
+
+  // Gold connector pads
+  ctx.fillStyle = '#eab308';
+  [40, 85, 160, 205].forEach(x=>{
+    ctx.beginPath();
+    ctx.arc(x, 240, 8, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createDFPlayerTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = '#0284c7';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('DFPlayer Mini', 30, 45);
+
+  ctx.font = '14px monospace';
+  ctx.fillText('TF CARD SLOT', 40, 140);
+  ctx.fillText('SPK_1  SPK_2', 30, 220);
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createTP4056Texture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = '#0369a1';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText('TP4056 1A', 35, 50);
+
+  ctx.font = '16px monospace';
+  ctx.fillText('B+   B-', 40, 210);
+  ctx.fillText('OUT+ OUT-', 140, 210);
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createBatteryLabelTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  // Silver pouch base
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Amber Kapton border
+  ctx.strokeStyle = '#d97706';
+  ctx.lineWidth = 14;
+  ctx.strokeRect(7, 7, 242, 242);
+
+  ctx.fillStyle = '#0f172a';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('3.7V 1200mAh', 35, 75);
+
+  ctx.font = '16px sans-serif';
+  ctx.fillText('4.44Wh Li-Po Battery', 35, 105);
+
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#b91c1c';
+  ctx.fillText('[+] RED WIRE', 35, 150);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillText('[-] BLACK WIRE', 35, 175);
+
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = '#475569';
+  ctx.fillText('CAUTION: Do not puncture or heat.', 35, 215);
+
+  return new THREE.CanvasTexture(cv);
+}
+
+function createSpeakerGrilleTexture(){
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const ctx = cv.getContext('2d');
+
+  // Dark matte chassis
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Outer ring
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.arc(128, 128, 115, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Perforated concentric acoustic hole rings
+  ctx.fillStyle = '#020617';
+  [25, 45, 65, 85, 100].forEach(r=>{
+    const count = Math.floor(r * 0.45);
+    for(let i = 0; i < count; i++){
+      const ang = (i / count) * Math.PI * 2;
+      const x = 128 + Math.cos(ang) * r;
+      const y = 128 + Math.sin(ang) * r;
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  // Central acoustic dome
+  ctx.fillStyle = '#334155';
+  ctx.beginPath();
+  ctx.arc(128, 128, 22, 0, Math.PI * 2);
+  ctx.fill();
+
+  return new THREE.CanvasTexture(cv);
+}
+
+// ============================================================
+// SHARED PBR MATERIALS
+// ============================================================
+const texKnitted = createKnittedFabricBumpTexture();
+const texRibbed  = createCuffRibbedTexture();
+
+const M = {
+  gloveFabric: new THREE.MeshStandardMaterial({
+    color: 0x202b36, roughness: 0.88, metalness: 0.03,
+    bumpMap: texKnitted, bumpScale: 0.0008
+  }),
+  gloveTip: new THREE.MeshStandardMaterial({
+    color: 0x17202a, roughness: 0.72, metalness: 0.02
+  }),
+  gloveCuff: new THREE.MeshStandardMaterial({
+    color: 0x273440, roughness: 0.92, metalness: 0.02,
+    bumpMap: texRibbed, bumpScale: 0.0015
+  }),
+
+  blackPCB: new THREE.MeshStandardMaterial({color: 0x0f1319, roughness: 0.45, metalness: 0.2}),
+  bluePCB:  new THREE.MeshStandardMaterial({color: 0x0284c7, roughness: 0.35, metalness: 0.25}),
+  purplePCB:new THREE.MeshStandardMaterial({color: 0x6b21a8, roughness: 0.35, metalness: 0.25}),
+  greenPCB: new THREE.MeshStandardMaterial({color: 0x15803d, roughness: 0.4, metalness: 0.2}),
+
+  espShield: new THREE.MeshStandardMaterial({
+    map: createESP32ShieldTexture(), roughness: 0.25, metalness: 0.88
+  }),
+  mpuTex: new THREE.MeshStandardMaterial({
+    map: createMPU6050Texture(), roughness: 0.4, metalness: 0.2
+  }),
+  mt3608Tex: new THREE.MeshStandardMaterial({
+    map: createMT3608Texture(), roughness: 0.4, metalness: 0.2
+  }),
+  dfplayerTex: new THREE.MeshStandardMaterial({
+    map: createDFPlayerTexture(), roughness: 0.4, metalness: 0.2
+  }),
+  tp4056Tex: new THREE.MeshStandardMaterial({
+    map: createTP4056Texture(), roughness: 0.4, metalness: 0.2
+  }),
+  batteryTex: new THREE.MeshStandardMaterial({
+    map: createBatteryLabelTexture(), roughness: 0.32, metalness: 0.6
+  }),
+  speakerTex: new THREE.MeshStandardMaterial({
+    map: createSpeakerGrilleTexture(), roughness: 0.5, metalness: 0.3
+  }),
+  flexSensorMat: new THREE.MeshStandardMaterial({
+    map: createFlexSensorTexture(), roughness: 0.3, metalness: 0.4,
+    transparent: true, opacity: 0.92
+  }),
+  sensorHousing: new THREE.MeshStandardMaterial({color: 0xdbe3eb, roughness: 0.38, metalness: 0.22}),
+
+  goldPin: new THREE.MeshStandardMaterial({color: 0xeab308, roughness: 0.25, metalness: 0.92}),
+  silverMetal: new THREE.MeshStandardMaterial({color: 0x94a3b8, roughness: 0.25, metalness: 0.9}),
+  usbPort: new THREE.MeshStandardMaterial({color: 0x64748b, roughness: 0.3, metalness: 0.85}),
+  plaBlack: new THREE.MeshStandardMaterial({color: 0x141820, roughness: 0.8, metalness: 0.08}),
+  kaptonTape: new THREE.MeshStandardMaterial({
+    color: 0xd97706, roughness: 0.25, metalness: 0.1,
+    transparent: true, opacity: 0.76
+  }),
+  heatShrink: new THREE.MeshStandardMaterial({color: 0x090b0e, roughness: 0.75}),
+  elasticKeeper: new THREE.MeshStandardMaterial({color: 0x0a0c10, roughness: 0.95}),
+
+  terminalBlue: new THREE.MeshStandardMaterial({color: 0x2563eb, roughness: 0.5}),
+  potTrimpot:   new THREE.MeshStandardMaterial({color: 0x1d4ed8, roughness: 0.45}),
+  brassScrew:   new THREE.MeshStandardMaterial({color: 0xd97706, roughness: 0.3, metalness: 0.85}),
+  inductorCore: new THREE.MeshStandardMaterial({color: 0x111827, roughness: 0.85}),
+
+  wireRed:    new THREE.MeshStandardMaterial({color: 0xef4444, roughness: 0.5}),
+  wireBlack:  new THREE.MeshStandardMaterial({color: 0x111827, roughness: 0.5}),
+  wireGreen:  new THREE.MeshStandardMaterial({color: 0x10b981, roughness: 0.5}),
+  wireBlue:   new THREE.MeshStandardMaterial({color: 0x3b82f6, roughness: 0.5}),
+  wireYellow: new THREE.MeshStandardMaterial({color: 0xf59e0b, roughness: 0.5}),
+  wirePurple: new THREE.MeshStandardMaterial({color: 0xa855f7, roughness: 0.5}),
+
+  ledRedGlow:   new THREE.MeshStandardMaterial({color: 0xff3333, emissive: 0xff2222, emissiveIntensity: 1.2, roughness: 0.2}),
+  ledGreenGlow: new THREE.MeshStandardMaterial({color: 0x33ff66, emissive: 0x22ee44, emissiveIntensity: 1.2, roughness: 0.2}),
+  ledBlueGlow:  new THREE.MeshStandardMaterial({color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 1.2, roughness: 0.2}),
+  ledOff:       new THREE.MeshStandardMaterial({color: 0x334155, roughness: 0.6})
+};
+
+// ============================================================
+// HELPER: WIRE & PIN CREATION
+// ============================================================
+function makeWire(pts, mat, radius, pathType){
+  radius = radius || 0.0009;
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const geo = new THREE.TubeGeometry(curve, 24, radius, 6, false);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.userData = {path: pathType || 'power', origMat: mat};
+  return mesh;
+}
+
+function makePinRow(count, pitch, height){
+  const g = new THREE.Group();
+  for(let i = 0; i < count; i++){
+    const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.00035, 0.00035, height, 6), M.goldPin);
+    pin.position.set(i * pitch - (count - 1) * pitch / 2, height / 2, 0);
+    g.add(pin);
+  }
+  return g;
+}
+
+// ============================================================
+// SECTION: ANATOMICAL LEFT-HAND GLOVE MODEL
+// ============================================================
+function buildHand(){
+  // 1. ORGANIC CONTOURED PALM MESH (Smooth beveled shape, ZERO sharp box corners)
+  const palmShape = new THREE.Shape();
+  // Coordinates in 2D (X is lateral, Y is along the hand from wrist to knuckles)
+  palmShape.moveTo(-0.033, -0.046); // Wrist medial (pinky side)
+  palmShape.quadraticCurveTo(-0.038, 0.000, -0.031, 0.038); // Outer pinky edge to pinky knuckle
+  palmShape.quadraticCurveTo(0.000, 0.047, 0.029, 0.038);   // Knuckle ridge arch across fingers
+  palmShape.quadraticCurveTo(0.036, 0.022, 0.041, 0.008);   // Web space transition to thumb
+  palmShape.quadraticCurveTo(0.045, -0.020, 0.033, -0.046); // Thenar muscle contour down to wrist
+  palmShape.lineTo(-0.033, -0.046);
+
+  const extrudeSettings = {
+    steps: 1,
+    depth: 0.016,
+    bevelEnabled: true,
+    bevelThickness: 0.0045,
+    bevelSize: 0.0045,
+    bevelOffset: 0,
+    bevelSegments: 5
+  };
+  const palmGeo = new THREE.ExtrudeGeometry(palmShape, extrudeSettings);
+  palmGeo.rotateX(Math.PI / 2);
+  palmGeo.translate(0, 0.001, 0);
+
+  const palmMesh = new THREE.Mesh(palmGeo, M.gloveFabric);
+  palmMesh.castShadow = true;
+  palmMesh.receiveShadow = true;
+  gloveGroup.add(palmMesh);
+
+  // 2. Extended dorsal cuff gives the removable electronics pod a forearm mounting area.
+  const cuffGeo = new THREE.CylinderGeometry(0.034, 0.036, 0.104, 24);
+  cuffGeo.rotateX(Math.PI / 2);
+  const cuff = new THREE.Mesh(cuffGeo, M.gloveCuff);
+  cuff.position.set(0, -0.003, -0.098);
+  cuff.scale.set(1.02, 0.45, 1.0);
+  cuff.castShadow = true;
+  cuff.receiveShadow = true;
+  gloveGroup.add(cuff);
+
+  // Two stretch bands wrap the wrist/forearm; their overlap represents adjustable hook-and-loop closure.
+  [-0.061, -0.134].forEach((z)=>{
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.032, 0.0022, 8, 40), M.elasticKeeper);
+    band.scale.set(1, 0.42, 1);
+    band.position.set(0, -0.003, z);
+    band.castShadow = true;
+    gloveGroup.add(band);
+  });
+
+  const cuffClosure = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.002, 0.013), M.elasticKeeper);
+  cuffClosure.position.set(0, 0.011, -0.061);
+  cuffClosure.castShadow = true;
+  gloveGroup.add(cuffClosure);
+
+  // 3. 5 ANATOMICALLY CORRECT FINGERS FOR LEFT HAND DORSAL VIEW
+  const fingerDefs = [
+    {
+      name: 'Thumb',
+      x: 0.038, y: -0.002, z: 0.008,
+      ry: 0.65, rx: -0.06, rz: -0.10,
+      r: 0.0084, phs: [0.032, 0.024]
+    },
+    {
+      name: 'Index',
+      x: 0.027, y: 0.003, z: 0.044,
+      ry: 0.03, rx: 0.0, rz: 0.0,
+      r: 0.0078, phs: [0.036, 0.028, 0.021]
+    },
+    {
+      name: 'Middle',
+      x: 0.009, y: 0.004, z: 0.047,
+      ry: 0.00, rx: 0.0, rz: 0.0,
+      r: 0.0080, phs: [0.040, 0.031, 0.023]
+    },
+    {
+      name: 'Ring',
+      x:-0.009, y: 0.003, z: 0.044,
+      ry: -0.04, rx: 0.0, rz: 0.0,
+      r: 0.0076, phs: [0.036, 0.028, 0.020]
+    },
+    {
+      name: 'Pinky',
+      x:-0.026, y: 0.002, z: 0.039,
+      ry: -0.08, rx: 0.0, rz: 0.0,
+      r: 0.0068, phs: [0.028, 0.022, 0.018]
+    }
+  ];
+
+  fingerJoints = [];
+
+  fingerDefs.forEach((fd)=>{
+    const root = new THREE.Group();
+    root.position.set(fd.x, fd.y, fd.z);
+    root.rotation.set(fd.rx, fd.ry, fd.rz);
+    gloveGroup.add(root);
+
+    const joints = [];
+    let parent = root;
+    let flexMesh = null;
+
+    fd.phs.forEach((len, pi)=>{
+      const jNode = new THREE.Group();
+      parent.add(jNode);
+      joints.push(jNode);
+
+      const isTip = (pi === fd.phs.length - 1);
+      const segMat = isTip ? M.gloveTip : M.gloveFabric;
+
+      // Phalanx cylindrical segment
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(fd.r * 0.92, fd.r * 1.05, len, 14), segMat);
+      seg.rotation.x = Math.PI / 2;
+      seg.position.set(0, 0, len / 2);
+      seg.castShadow = true;
+      jNode.add(seg);
+
+      // Anatomical smooth spherical knuckle joint
+      const knuckle = new THREE.Mesh(new THREE.SphereGeometry(fd.r * 1.05, 12, 12), segMat);
+      knuckle.castShadow = true;
+      jNode.add(knuckle);
+
+      // Fingertip rounded cap
+      if(isTip){
+        const tipCap = new THREE.Mesh(new THREE.SphereGeometry(fd.r * 0.92, 12, 12), M.gloveTip);
+        tipCap.position.set(0, 0, len);
+        tipCap.scale.set(1, 0.85, 1.2);
+        tipCap.castShadow = true;
+        jNode.add(tipCap);
+      }
+
+      // Flex sensor strip along dorsal finger surface
+      const flexLen = len * 0.92;
+      const flexStrip = new THREE.Mesh(new THREE.BoxGeometry(0.0055, 0.0006, flexLen), M.flexSensorMat);
+      flexStrip.position.set(0, fd.r * 1.05, len / 2);
+      flexStrip.castShadow = true;
+      jNode.add(flexStrip);
+
+      // Low-profile guide rails and anchor points protect and secure the flex strip.
+      [-1, 1].forEach((side)=>{
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.0007, 0.0012, flexLen), M.sensorHousing);
+        rail.position.set(side * 0.0031, fd.r * 1.08, len / 2);
+        rail.castShadow = true;
+        jNode.add(rail);
+      });
+
+      [0.08, 0.92].forEach((t)=>{
+        const anchor = new THREE.Mesh(new THREE.SphereGeometry(0.001, 8, 8), M.silverMetal);
+        anchor.position.set(0, fd.r * 1.15, len * t);
+        anchor.castShadow = true;
+        jNode.add(anchor);
+      });
+
+      if(!flexMesh) flexMesh = flexStrip;
+
+      // Elastic keeper bands over the sensor
+      if(pi < 2){
+        const band = new THREE.Mesh(new THREE.TorusGeometry(fd.r * 1.16, 0.0011, 6, 16), M.elasticKeeper);
+        band.rotation.y = Math.PI / 2;
+        band.position.set(0, 0, len * 0.55);
+        jNode.add(band);
+      }
+
+      // Translucent amber Kapton tape at distal and knuckle anchors
+      if(isTip || pi === 0){
+        const kap = new THREE.Mesh(new THREE.PlaneGeometry(0.009, 0.0055), M.kaptonTape);
+        kap.rotation.x = -Math.PI / 2;
+        kap.position.set(0, fd.r * 1.08, pi === 0 ? 0.005 : len * 0.7);
+        jNode.add(kap);
+      }
+
+      // Next joint anchor link
+      const nextAnchor = new THREE.Group();
+      nextAnchor.position.set(0, 0, len);
+      jNode.add(nextAnchor);
+      parent = nextAnchor;
+    });
+
+    // Base terminal solder connection with black heat-shrink tubing
+    const shrink = new THREE.Mesh(new THREE.CylinderGeometry(0.0016, 0.0016, 0.008, 8), M.heatShrink);
+    shrink.rotation.x = Math.PI / 2;
+    shrink.position.set(0, fd.r * 1.04, -0.004);
+    root.add(shrink);
+
+    fingerJoints.push({root, joints, flexMesh, def: fd});
+  });
+}
+
+// ============================================================
+// SECTION: REMOVABLE DORSAL FOREARM POD TRAY
+// ============================================================
+function buildMountPlate(){
+  const g = new THREE.Group();
+  g.name = 'mount';
+
+  // Low-profile tray keeps rigid boards off the palm and knuckles.
+  const plateGeo = new THREE.BoxGeometry(0.078, 0.002, 0.090);
+  const plate = new THREE.Mesh(plateGeo, M.plaBlack);
+  plate.position.set(0, 0.014, -0.097);
+  plate.castShadow = true;
+  plate.receiveShadow = true;
+  g.add(plate);
+
+  // Raised tray edges and corner tabs restrain boards without crossing the finger joints.
+  [-1, 1].forEach((side)=>{
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.002, 0.004, 0.082), M.plaBlack);
+    rail.position.set(side * 0.038, 0.017, -0.097);
+    rail.castShadow = true;
+    g.add(rail);
+  });
+  [[-0.035, -0.139], [0.035, -0.139], [-0.035, -0.055], [0.035, -0.055]].forEach(pt=>{
+    const tab = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.002, 0.008), M.plaBlack);
+    tab.position.set(pt[0], 0.015, pt[1]);
+    g.add(tab);
+  });
+
+  mountGroup.add(g);
+  allInteractables.push({mesh: g, id: 'mount', pos: new THREE.Vector3(0, 0.015, -0.097)});
+}
+
+function buildLightweightEnclosure(){
+  const g = new THREE.Group();
+  g.name = 'lightweightEnclosure';
+
+  const width = 0.092;
+  const depth = 0.104;
+  const centerZ = -0.097;
+  const wallThickness = 0.0012;
+  const wallHeight = 0.020;
+  const wallCenterY = 0.024;
+  const wallMaterial = new THREE.MeshStandardMaterial({
+    color: 0x263645, roughness: 0.62, metalness: 0.04, transparent: true, opacity: 0.76
+  });
+  const lidMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9bd5e8, roughness: 0.36, metalness: 0.02,
+    transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false
+  });
+  const ventMaterial = new THREE.MeshStandardMaterial({color: 0x101820, roughness: 0.8});
+
+  const addBox = (parent, size, position, material)=>{
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+    mesh.position.set(position[0], position[1], position[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  };
+
+  const sideWallLength = depth - wallThickness * 2;
+  [-1, 1].forEach((side)=>{
+    addBox(g, [wallThickness, wallHeight, sideWallLength],
+      [side * (width / 2 - wallThickness / 2), wallCenterY, centerZ], wallMaterial);
+  });
+
+  const backPortWidth = 0.014;
+  const backWallLength = width - wallThickness * 2;
+  const backSegments = [
+    {width: 0.057, centerX: -0.0145},
+    {width: backWallLength - 0.057 - backPortWidth, centerX: 0.035}
+  ];
+  backSegments.forEach((segment)=>{
+    addBox(g, [segment.width, wallHeight, wallThickness],
+      [segment.centerX, wallCenterY, centerZ - depth / 2 + wallThickness / 2], wallMaterial);
+  });
+  addBox(g, [backWallLength, wallHeight, wallThickness],
+    [0, wallCenterY, centerZ + depth / 2 - wallThickness / 2], wallMaterial);
+
+  const lidShape = new THREE.Shape();
+  const halfWidth = width / 2;
+  const halfDepth = depth / 2;
+  const cornerRadius = 0.006;
+  lidShape.moveTo(-halfWidth + cornerRadius, -halfDepth);
+  lidShape.lineTo(halfWidth - cornerRadius, -halfDepth);
+  lidShape.quadraticCurveTo(halfWidth, -halfDepth, halfWidth, -halfDepth + cornerRadius);
+  lidShape.lineTo(halfWidth, halfDepth - cornerRadius);
+  lidShape.quadraticCurveTo(halfWidth, halfDepth, halfWidth - cornerRadius, halfDepth);
+  lidShape.lineTo(-halfWidth + cornerRadius, halfDepth);
+  lidShape.quadraticCurveTo(-halfWidth, halfDepth, -halfWidth, halfDepth - cornerRadius);
+  lidShape.lineTo(-halfWidth, -halfDepth + cornerRadius);
+  lidShape.quadraticCurveTo(-halfWidth, -halfDepth, -halfWidth + cornerRadius, -halfDepth);
+
+  const addLidHole = (path)=>lidShape.holes.push(path);
+  const speakerOpening = new THREE.Path();
+  speakerOpening.absarc(-0.024, -0.060 - centerZ, 0.0105, 0, Math.PI * 2, true);
+  addLidHole(speakerOpening);
+
+  const controlButtonOpening = new THREE.Path();
+  controlButtonOpening.absarc(0.041, -0.073 - centerZ, 0.0042, 0, Math.PI * 2, true);
+  addLidHole(controlButtonOpening);
+
+  const ledOpening = new THREE.Path();
+  ledOpening.absarc(0.041, -0.058 - centerZ, 0.0026, 0, Math.PI * 2, true);
+  addLidHole(ledOpening);
+
+  const switchOpening = new THREE.Path();
+  switchOpening.moveTo(0.032, -0.114 - centerZ);
+  switchOpening.lineTo(0.032, -0.102 - centerZ);
+  switchOpening.lineTo(0.038, -0.102 - centerZ);
+  switchOpening.lineTo(0.038, -0.114 - centerZ);
+  switchOpening.closePath();
+  addLidHole(switchOpening);
+
+  const lid = new THREE.Mesh(new THREE.ShapeGeometry(lidShape), lidMaterial);
+  lid.rotation.x = Math.PI / 2;
+  lid.position.set(0, 0.034, centerZ);
+  lid.renderOrder = 2;
+  g.add(lid);
+
+  [-0.006, -0.003, 0, 0.003, 0.006].forEach((offset)=>{
+    addBox(g, [0.016, 0.0005, 0.0008],
+      [-0.024, 0.0342, -0.060 + offset], ventMaterial);
+  });
+
+  const button = new THREE.Mesh(new THREE.CylinderGeometry(0.0032, 0.0032, 0.0014, 16), M.silverMetal);
+  button.position.set(0.041, 0.0348, -0.073);
+  g.add(button);
+
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.0018, 12, 8), M.ledGreenGlow);
+  led.position.set(0.041, 0.035, -0.058);
+  g.add(led);
+
+  const switchCap = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.0014, 0.007), new THREE.MeshStandardMaterial({color: 0xdc2626, roughness: 0.38}));
+  switchCap.position.set(0.035, 0.0348, -0.108);
+  g.add(switchCap);
+
+  [-0.027, -0.020, -0.013, -0.006].forEach((z)=>{
+    addBox(g, [0.0008, 0.001, 0.004],
+      [-width / 2, 0.027, z], ventMaterial);
+  });
+
+  enclosureGroup.add(g);
+}
+
+// ============================================================
+// SECTION: ESP32 DEVKIT V1 (COMPLETELY OPEN & VISIBLE)
+// ============================================================
+function buildESP32(){
+  const g = new THREE.Group();
+  g.name = 'esp32';
+
+  // Black PCB (51.5 x 28.3 mm)
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.0283, 0.0016, 0.0515), M.blackPCB);
+  pcb.castShadow = true;
+  g.add(pcb);
+
+  // Metal RF Shield Can with silkscreen texture
+  const shield = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.003, 0.024), M.espShield);
+  shield.position.set(0, 0.0022, -0.005);
+  shield.castShadow = true;
+  g.add(shield);
+
+  // PCB trace antenna segment
+  const ant = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.0018, 0.007), new THREE.MeshStandardMaterial({color:0x111116, roughness:0.7}));
+  ant.position.set(0, 0.0016, -0.021);
+  g.add(ant);
+
+  // Micro-USB port
+  const usb = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.003, 0.006), M.usbPort);
+  usb.position.set(0, 0.002, 0.026);
+  g.add(usb);
+
+  // Pin headers (15 pins left, 15 pins right)
+  const pinRowL = makePinRow(15, 0.00254, 0.008);
+  pinRowL.position.set(-0.0125, -0.001, 0);
+  pinRowL.rotation.y = Math.PI / 2;
+  g.add(pinRowL);
+
+  const pinRowR = makePinRow(15, 0.00254, 0.008);
+  pinRowR.position.set(0.0125, -0.001, 0);
+  pinRowR.rotation.y = Math.PI / 2;
+  g.add(pinRowR);
+
+  // EN and BOOT tactile switches
+  [-0.008, 0.008].forEach(xx=>{
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.0014, 0.0014, 0.0012, 8), M.silverMetal);
+    btn.position.set(xx, 0.0018, 0.018);
+    g.add(btn);
+  });
+
+  // Power LED
+  const led = new THREE.Mesh(new THREE.BoxGeometry(0.0015, 0.001, 0.001), isPowered ? M.ledRedGlow : M.ledOff);
+  led.position.set(0.006, 0.0018, 0.021);
+  g.add(led);
+  ledMeshes.esp32 = led;
+
+  // Mounted on the removable forearm pod, away from the flexing palm.
+  g.position.set(0.004, 0.016, -0.084);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'esp32', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: MPU-6050 IMU
+// ============================================================
+function buildMPU6050(){
+  const g = new THREE.Group();
+  g.name = 'mpu6050';
+
+  // Blue PCB with silkscreen
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.0014, 0.021), M.mpuTex);
+  pcb.castShadow = true;
+  g.add(pcb);
+
+  // QFN-24 IMU chip
+  const chip = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.001, 0.004), new THREE.MeshStandardMaterial({color:0x111111, roughness:0.8}));
+  chip.position.set(0, 0.001, -0.002);
+  g.add(chip);
+
+  // 8-pin header
+  const pins = makePinRow(8, 0.00254, 0.006);
+  pins.position.set(0, -0.001, 0.008);
+  g.add(pins);
+
+  // IMU sits near the wrist to measure palm motion without obstructing the knuckles.
+  g.position.set(0.000, 0.016, -0.060);
+  g.rotation.y = 0.08;
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'mpu6050', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: MT3608 BOOST CONVERTER
+// ============================================================
+function buildMT3608(){
+  const g = new THREE.Group();
+  g.name = 'mt3608';
+
+  // Purple PCB
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.017, 0.0014, 0.036), M.mt3608Tex);
+  pcb.castShadow = true;
+  g.add(pcb);
+
+  // Blue trimpot
+  const pot = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.0035, 0.005), M.potTrimpot);
+  pot.position.set(0.004, 0.0024, 0.008);
+  g.add(pot);
+
+  // Brass screw on pot
+  const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.0009, 0.0009, 0.001, 8), M.brassScrew);
+  screw.position.set(0.004, 0.0042, 0.008);
+  g.add(screw);
+
+  // Power inductor coil
+  const inductor = new THREE.Mesh(new THREE.BoxGeometry(0.007, 0.004, 0.007), M.inductorCore);
+  inductor.position.set(-0.003, 0.0025, -0.006);
+  g.add(inductor);
+
+  // Blue 2-pin screw terminal
+  const term = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.006, 0.006), M.terminalBlue);
+  term.position.set(0, 0.0035, 0.015);
+  g.add(term);
+
+  // Mounted beside the ESP32 inside the forearm pod.
+  g.position.set(0.029, 0.016, -0.084);
+  g.rotation.y = 0.10;
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'mt3608', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: DFPLAYER MINI
+// ============================================================
+function buildDFPlayer(){
+  const g = new THREE.Group();
+  g.name = 'dfplayer';
+
+  // Blue PCB
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.0205, 0.0015, 0.0205), M.dfplayerTex);
+  pcb.castShadow = true;
+  g.add(pcb);
+
+  // Metal MicroSD Card Socket
+  const sdSlot = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.0024, 0.013), M.silverMetal);
+  sdSlot.position.set(0, 0.0018, -0.002);
+  g.add(sdSlot);
+
+  // Inserted MicroSD card tip
+  const sdCard = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.0008, 0.008), new THREE.MeshStandardMaterial({color:0x1e1b4b, roughness:0.5}));
+  sdCard.position.set(0, 0.0024, -0.006);
+  g.add(sdCard);
+
+  // Pin headers
+  const pins = makePinRow(8, 0.00254, 0.006);
+  pins.position.set(0, -0.001, 0.008);
+  pins.rotation.y = Math.PI / 2;
+  g.add(pins);
+
+  // Mounted beside the ESP32 inside the forearm pod.
+  g.position.set(-0.026, 0.016, -0.084);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'dfplayer', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: MINI SPEAKER (ELEVATED & PROMINENT ON WRIST CUFF)
+// ============================================================
+function buildSpeaker(){
+  const g = new THREE.Group();
+  g.name = 'speaker';
+
+  // Compact 20mm speaker keeps the audio output on the wrist pod.
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.004, 24), M.plaBlack);
+  body.castShadow = true;
+  g.add(body);
+
+  // Perforated acoustic grille top
+  const grille = new THREE.Mesh(new THREE.CircleGeometry(0.0098, 24), M.speakerTex);
+  grille.rotation.x = -Math.PI / 2;
+  grille.position.y = 0.0021;
+  g.add(grille);
+
+  // Speaker cone center dome for physical vibration animation
+  const cone = new THREE.Mesh(new THREE.SphereGeometry(0.0028, 12, 8), M.silverMetal);
+  cone.scale.set(1, 0.35, 1);
+  cone.position.y = 0.0022;
+  g.add(cone);
+  speakerMesh = cone;
+
+  // Mounted near the pod edge, clear of the main boards.
+  g.position.set(-0.024, 0.016, -0.060);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'speaker', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: 3.7V LIPO BATTERY (FULLY VISIBLE ON DORSAL WRIST)
+// ============================================================
+function buildBattery(){
+  const g = new THREE.Group();
+  g.name = 'battery';
+
+  // Silver pouch cell with printed specs label
+  const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.005, 0.044), M.batteryTex);
+  pouch.castShadow = true;
+  g.add(pouch);
+
+  // Amber Kapton tape sealed perimeter fold
+  const kaptonSeal = new THREE.Mesh(new THREE.BoxGeometry(0.033, 0.0055, 0.005), M.kaptonTape);
+  kaptonSeal.position.set(0, 0, 0.022);
+  g.add(kaptonSeal);
+
+  // Black elastic retention strap holding battery to wrist cuff
+  const strap = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.0058, 0.008), M.elasticKeeper);
+  strap.position.set(0, 0, 0);
+  g.add(strap);
+
+  // Red and black battery power leads
+  g.add(makeWire([new THREE.Vector3(0.006, 0.0025, 0.023), new THREE.Vector3(0.008, 0.004, 0.030), new THREE.Vector3(0.005, 0.004, 0.038)], M.wireRed, 0.0009, 'power'));
+  g.add(makeWire([new THREE.Vector3(-0.006, 0.0025, 0.023), new THREE.Vector3(-0.008, 0.004, 0.030), new THREE.Vector3(-0.005, 0.004, 0.038)], M.wireBlack, 0.0009, 'power'));
+
+  // Battery sits on the proximal forearm section of the pod.
+  g.position.set(-0.020, 0.016, -0.120);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'battery', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: TP4056 CHARGER MODULE (CLEARLY VISIBLE AT WRIST EDGE)
+// ============================================================
+function buildTP4056(){
+  const g = new THREE.Group();
+  g.name = 'tp4056';
+
+  // Blue PCB
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.017, 0.0014, 0.026), M.tp4056Tex);
+  pcb.castShadow = true;
+  g.add(pcb);
+
+  // Micro-USB charging port facing rearwards
+  const usb = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.003, 0.006), M.usbPort);
+  usb.position.set(0, 0.0018, -0.013);
+  g.add(usb);
+
+  // Red Charging LED
+  const ledR = new THREE.Mesh(new THREE.BoxGeometry(0.0015, 0.001, 0.001), isPowered ? M.ledRedGlow : M.ledOff);
+  ledR.position.set(0.004, 0.0014, 0.008);
+  g.add(ledR);
+  ledMeshes.tpRed = ledR;
+
+  // Blue Standby/Full LED
+  const ledB = new THREE.Mesh(new THREE.BoxGeometry(0.0015, 0.001, 0.001), isPowered ? M.ledBlueGlow : M.ledOff);
+  ledB.position.set(-0.004, 0.0014, 0.008);
+  g.add(ledB);
+  ledMeshes.tpBlue = ledB;
+
+  // Charging board sits beside the battery with its USB port facing outward.
+  g.position.set(0.020, 0.016, -0.120);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'tp4056', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: SLIDE POWER SWITCH
+// ============================================================
+function buildSwitch(){
+  const g = new THREE.Group();
+  g.name = 'switch';
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.0035, 0.009), M.silverMetal);
+  g.add(body);
+
+  const knob = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.0035, 0.003), new THREE.MeshStandardMaterial({color:0xdc2626, roughness:0.3}));
+  knob.position.set(0, 0.002, isPowered ? 0.0022 : -0.0022);
+  g.add(knob);
+  switchKnobMesh = knob;
+
+  g.position.set(0.035, 0.016, -0.108);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'switch', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: STATUS LED & RESISTORS
+// ============================================================
+function buildStatusLED(){
+  const g = new THREE.Group();
+  g.name = 'statusLed';
+
+  // 3mm diffused dome LED
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.002, 12, 12), isPowered ? (isOnline ? M.ledBlueGlow : M.ledGreenGlow) : M.ledOff);
+  led.position.set(0.041, 0.019, -0.058);
+  g.add(led);
+  ledMeshes.status = led;
+
+  // Tactile push button
+  const btnBase = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.003, 0.006), M.plaBlack);
+  btnBase.position.set(0.041, 0.018, -0.073);
+  g.add(btnBase);
+
+  const btnCap = new THREE.Mesh(new THREE.CylinderGeometry(0.0018, 0.0018, 0.002, 10), M.silverMetal);
+  btnCap.position.set(0.041, 0.021, -0.073);
+  g.add(btnCap);
+
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'statusLed', pos: new THREE.Vector3(0.041, 0.019, -0.065)});
+}
+
+function buildResistors(){
+  const g = new THREE.Group();
+  g.name = 'resistors';
+
+  // Perfboard base
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.001, 0.014), M.greenPCB);
+  g.add(board);
+
+  // 5 miniature axial resistors with color bands (Brown, Black, Orange, Gold = 10k)
+  for(let i = 0; i < 5; i++){
+    const res = new THREE.Mesh(new THREE.CylinderGeometry(0.0009, 0.0009, 0.009, 8), new THREE.MeshStandardMaterial({color:0xd4a373, roughness:0.4}));
+    res.rotation.z = Math.PI / 2;
+    res.position.set(0, 0.0012, -0.005 + i * 0.0025);
+    g.add(res);
+  }
+
+  g.position.set(0.025, 0.016, -0.055);
+  compGroup.add(g);
+  allInteractables.push({mesh: g, id: 'resistors', pos: g.position.clone()});
+}
+
+// ============================================================
+// SECTION: REALISTIC WIRING HARNESS
+// ============================================================
+function buildWiring(){
+  const W = wireGroup;
+  const espTarget = new THREE.Vector3(0.004, 0.016, -0.084);
+
+  // Flexible sensor leads follow the dorsal glove and enter the wrist pod together.
+  const fColors = [M.wireYellow, M.wireGreen, M.wireBlue, M.wirePurple, M.wireGreen];
+  fingerJoints.forEach((fj, i)=>{
+    const fb = fj.def;
+    const channelX = fb.x * 0.36;
+    const pts = [
+      new THREE.Vector3(fb.x, 0.013, fb.z),
+      new THREE.Vector3(fb.x * 0.8, 0.018, 0.004),
+      new THREE.Vector3(channelX, 0.018, -0.047),
+      new THREE.Vector3(channelX, 0.016, espTarget.z)
+    ];
+    W.add(makeWire(pts, fColors[i], 0.00045, 'sensor'));
+  });
+
+  // MPU-6050 I2C wires (Green SDA, Blue SCL, Red VCC, Black GND)
+  const mpuP = new THREE.Vector3(0.000, 0.016, -0.060);
+  W.add(makeWire([mpuP.clone().add(new THREE.Vector3(0.004,0.001,0)), espTarget.clone().add(new THREE.Vector3(-0.007,0,0))], M.wireGreen, 0.00055, 'sensor'));
+  W.add(makeWire([mpuP.clone().add(new THREE.Vector3(0.006,0.001,0)), espTarget.clone().add(new THREE.Vector3(-0.004,0,0.002))], M.wireBlue, 0.00055, 'sensor'));
+
+  // DFPlayer UART wires (Purple)
+  const dfP = new THREE.Vector3(-0.026, 0.016, -0.084);
+  W.add(makeWire([dfP.clone().add(new THREE.Vector3(0.008,0.001,0)), espTarget.clone().add(new THREE.Vector3(-0.009,0,0))], M.wirePurple, 0.00055, 'audio'));
+
+  // Speaker audio leads (Red & Black)
+  const spkP = new THREE.Vector3(-0.024, 0.016, -0.060);
+  W.add(makeWire([dfP.clone().add(new THREE.Vector3(0,0.001,0.006)), spkP.clone().add(new THREE.Vector3(0,0.002,-0.010))], M.wireRed, 0.00045, 'audio'));
+  W.add(makeWire([dfP.clone().add(new THREE.Vector3(0.003,0,-0.006)), spkP.clone().add(new THREE.Vector3(0.004,0.002,0.010))], M.wireBlack, 0.00045, 'audio'));
+
+  // Power chain: Battery -> TP4056 -> Switch -> MT3608 -> ESP32
+  const battP = new THREE.Vector3(-0.020, 0.016, -0.120);
+  const tpP   = new THREE.Vector3(0.020, 0.016, -0.120);
+  const swP   = new THREE.Vector3(0.035, 0.016, -0.108);
+  const mtP   = new THREE.Vector3(0.029, 0.016, -0.084);
+
+  W.add(makeWire([battP.clone().add(new THREE.Vector3(0.005,0.002,0.01)), new THREE.Vector3(0.000,0.020,-0.116), tpP.clone().add(new THREE.Vector3(-0.004,0.001,0.008))], M.wireRed, 0.00065, 'power'));
+  W.add(makeWire([tpP.clone().add(new THREE.Vector3(0.004,0.002,0.004)), swP.clone().add(new THREE.Vector3(-0.002,0,0))], M.wireRed, 0.00065, 'power'));
+  W.add(makeWire([swP.clone().add(new THREE.Vector3(0.003,0,0.003)), mtP.clone().add(new THREE.Vector3(0,0,0.012))], M.wireRed, 0.00065, 'power'));
+  W.add(makeWire([mtP.clone().add(new THREE.Vector3(-0.006,0.002,-0.01)), espTarget.clone().add(new THREE.Vector3(0.009,0,0.006))], M.wireRed, 0.00065, 'power'));
+  W.add(makeWire([battP.clone().add(new THREE.Vector3(-0.005,0.002,0)), new THREE.Vector3(-0.036,0.020,-0.105), new THREE.Vector3(-0.036,0.018,-0.084), espTarget.clone().add(new THREE.Vector3(-0.009,0,-0.004))], M.wireBlack, 0.00055, 'power'));
+
+  // Small hold-down patches keep flexible leads off the palm and knuckles.
+  const tapePatches = [
+    {x:-0.005, y:0.018, z:-0.020}, {x:0.015, y:0.018, z:-0.040},
+    {x:0.008, y:0.020, z:-0.090}, {x:0.026, y:0.020, z:-0.112}
+  ];
+  tapePatches.forEach(tp=>{
+    const patch = new THREE.Mesh(new THREE.PlaneGeometry(0.011, 0.0055), M.kaptonTape);
+    patch.rotation.x = -Math.PI / 2;
+    patch.position.set(tp.x, tp.y, tp.z);
+    W.add(patch);
+  });
+}
+
+// Register flex sensor interactables
+function registerFlexInteractables(){
+  fingerJoints.forEach((fj)=>{
+    allInteractables.push({
+      mesh: fj.root, id: 'flex', pos: fj.root.position.clone().add(new THREE.Vector3(0, 0.008, 0.018))
+    });
+  });
+}
+
+// ============================================================
+// BUILD EVERYTHING
+// ============================================================
+buildHand();
+buildMountPlate();
+buildLightweightEnclosure();
+buildESP32();
+buildMPU6050();
+buildMT3608();
+buildDFPlayer();
+buildSpeaker();
+buildBattery();
+buildTP4056();
+buildSwitch();
+buildStatusLED();
+buildResistors();
+buildWiring();
+registerFlexInteractables();
+
+// ============================================================
+// CAMERA VIEWS & ORIENTATION LOGIC
+// ============================================================
+const CAMERA_PRESETS_VERTICAL = {
+  hero:       {pos:[0.16, -0.005, 0.45], target:[0, -0.031, 0]},
+  dorsal:     {pos:[0, 0.00, 0.40],      target:[0, -0.02, 0]},
+  palm:       {pos:[0, 0.00, -0.40],     target:[0, -0.02, 0]},
+  thumb:      {pos:[-0.34, 0.00, 0.02],  target:[-0.02, -0.02, 0]},
+  pinky:      {pos:[0.34, 0.00, 0.02],   target:[0.02, -0.02, 0]},
+  fingertips: {pos:[0, 0.24, 0.06],      target:[0, 0.08, 0]},
+  wrist:      {pos:[0.04, -0.20, 0.17],  target:[0, -0.10, 0]},
+  mcu:        {pos:[0.01, -0.08, 0.15],  target:[0, -0.10, 0]}
+};
+
+const CAMERA_PRESETS_FLAT = {
+  hero:       {pos:[0.18, 0.26, 0.40],   target:[0, 0.008, -0.035]},
+  dorsal:     {pos:[0, 0.45, -0.05],     target:[0, 0.006, -0.05]},
+  palm:       {pos:[0, -0.42, -0.03],    target:[0, -0.005, -0.03]},
+  thumb:      {pos:[0.26, 0.08, 0.05],   target:[0.038, 0.004, 0.02]},
+  pinky:      {pos:[-0.26, 0.08, 0.05],  target:[-0.026, 0.004, 0.02]},
+  fingertips: {pos:[0, 0.18, 0.18],      target:[0, 0.004, 0.06]},
+  wrist:      {pos:[0.08, 0.14, -0.22],  target:[0.005, 0.004, -0.10]},
+  mcu:        {pos:[0.03, 0.15, 0.06],   target:[0.004, 0.014, -0.09]}
+};
+
+function toggleOrientation(){
+  isVertical = !isVertical;
+  const btn = document.getElementById('btnOrient');
+  btn.textContent = isVertical ? 'Pose: Vertical' : 'Pose: Flat';
+  btn.classList.toggle('active', isVertical);
+
+  if(isVertical){
+    targetGroupRot = {x: Math.PI / 2, y: Math.PI, z: 0};
+    targetGroupPos = {x: 0, y: -0.015, z: 0};
+    floor.position.y = -0.130;
+  } else {
+    targetGroupRot = {x: 0, y: 0, z: 0};
+    targetGroupPos = {x: 0, y: 0, z: 0};
+    floor.position.y = -0.026;
+  }
+  setView('hero');
+}
+
+function setView(name){
+  document.querySelectorAll('#topBar .btn').forEach(b=>{
+    if(b.id.startsWith('btnView')) b.classList.remove('active');
+  });
+  const btn = document.getElementById('btnView' + name.charAt(0).toUpperCase() + name.slice(1));
+  if(btn) btn.classList.add('active');
+
+  const presets = isVertical ? CAMERA_PRESETS_VERTICAL : CAMERA_PRESETS_FLAT;
+  const p = presets[name] || presets.hero;
+  flyTo(new THREE.Vector3(...p.target), 0.35, new THREE.Vector3(...p.pos));
+}
+
+function flyTo(target, dist, camPos){
+  const dur = 750;
+  const startPos = camera.position.clone();
+  const startTarget = controls.target.clone();
+
+  let endPos = camPos;
+  if(!endPos){
+    const dir = camera.position.clone().sub(target).normalize();
+    endPos = target.clone().add(dir.multiplyScalar(dist));
+  }
+
+  const startTime = performance.now();
+  function step(now){
+    const t = Math.min((now - startTime) / dur, 1);
+    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    camera.position.lerpVectors(startPos, endPos, ease);
+    controls.target.lerpVectors(startTarget, target, ease);
+    controls.update();
+    if(t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ============================================================
+// EXPLODED VIEW LOGIC
+// ============================================================
+function toggleExplode(){
+  isExploded = !isExploded;
+  targetExplodeT = isExploded ? 1 : 0;
+  document.getElementById('btnExplode').classList.toggle('active', isExploded);
+}
+
+function updateExplodeAnimation(){
+  explodeT += (targetExplodeT - explodeT) * 0.08;
+  if(Math.abs(explodeT - targetExplodeT) < 0.001) explodeT = targetExplodeT;
+
+  const f = explodeT;
+  allInteractables.forEach(item=>{
+    if(!item.pos) return;
+    const mesh = item.mesh;
+    if(!mesh.userData.origPos) mesh.userData.origPos = mesh.position.clone();
+    const orig = mesh.userData.origPos;
+
+    const offset = new THREE.Vector3(0, f * 0.055, 0);
+    if(item.id === 'esp32') offset.y = f * 0.048;
+    else if(item.id === 'mpu6050') { offset.y = f * 0.038; offset.z = f * 0.015; }
+    else if(item.id === 'mt3608')  { offset.y = f * 0.042; offset.x = f * 0.02; }
+    else if(item.id === 'dfplayer'){ offset.y = f * 0.044; offset.x = -f * 0.02; }
+    else if(item.id === 'speaker') { offset.y = f * 0.058; offset.x = f * 0.02; }
+    else if(item.id === 'battery') { offset.y = f * 0.040; offset.z = -f * 0.015; }
+    else if(item.id === 'tp4056')  { offset.y = f * 0.045; offset.z = -f * 0.020; }
+    else if(item.id === 'mount')   { offset.y = f * 0.012; }
+
+    mesh.position.copy(orig).add(offset);
+  });
+}
+
+// ============================================================
+// INTERACTIVE TOGGLES: SIGNALS, POWER, MODE
+// ============================================================
+function cycleSignalMode(){
+  const modes = ['all', 'power', 'sensor', 'audio'];
+  const curIdx = modes.indexOf(currentSignalMode);
+  currentSignalMode = modes[(curIdx + 1) % modes.length];
+
+  const labels = {all:'Signals: All', power:'Signals: Power', sensor:'Signals: Sensors', audio:'Signals: Audio'};
+  document.getElementById('btnSignal').textContent = labels[currentSignalMode];
+
+  wireGroup.traverse(child=>{
+    if(child.isMesh && child.userData && child.userData.path){
+      if(currentSignalMode === 'all'){
+        child.material = child.userData.origMat;
+        child.material.opacity = 1.0;
+        child.material.transparent = false;
+      } else if(child.userData.path === currentSignalMode){
+        child.material = child.userData.origMat;
+        child.material.opacity = 1.0;
+        child.material.transparent = false;
+      } else {
+        child.material = child.userData.origMat;
+        child.material.opacity = 0.15;
+        child.material.transparent = true;
+      }
+    }
+  });
+}
+
+function togglePower(){
+  isPowered = !isPowered;
+  const btn = document.getElementById('btnPower');
+  btn.textContent = isPowered ? 'Power: ON' : 'Power: OFF';
+  btn.classList.toggle('active', isPowered);
+  btn.classList.toggle('red', !isPowered);
+
+  if(switchKnobMesh) switchKnobMesh.position.z = isPowered ? 0.0022 : -0.0022;
+
+  // Toggle LEDs
+  if(ledMeshes.esp32) ledMeshes.esp32.material = isPowered ? M.ledRedGlow : M.ledOff;
+  if(ledMeshes.tpRed) ledMeshes.tpRed.material = isPowered ? M.ledRedGlow : M.ledOff;
+  if(ledMeshes.tpBlue) ledMeshes.tpBlue.material = isPowered ? M.ledBlueGlow : M.ledOff;
+  if(ledMeshes.status) ledMeshes.status.material = isPowered ? (isOnline ? M.ledBlueGlow : M.ledGreenGlow) : M.ledOff;
+
+  document.getElementById('hudPower').textContent = isPowered ? '5.02V (MT3608)' : '0.00V (OFF)';
+  document.getElementById('hudPower').style.color = isPowered ? 'var(--green)' : 'var(--red)';
+
+  serialLog(isPowered ? '[POWER] Master slide switch CLOSED. 5V rail active.' : '[POWER] Master switch OPEN. Power disconnected.', isPowered ? 't' : 'w');
+}
+
+function toggleMode(){
+  isOnline = !isOnline;
+  const btn = document.getElementById('btnMode');
+  btn.textContent = isOnline ? 'Mode: Wi-Fi' : 'Mode: Offline';
+  btn.classList.toggle('active', isOnline);
+
+  if(ledMeshes.status && isPowered){
+    ledMeshes.status.material = isOnline ? M.ledBlueGlow : M.ledGreenGlow;
+  }
+  serialLog(isOnline ? '[NET] Wi-Fi enabled. Connected to OTA server (ADC2 offline).' : '[TFLite] Operating in OFFLINE mode. Edge neural network active.', 'u');
+}
+
+// ============================================================
+// FINGER BENDING & ADC VOLTAGE DIVIDER COMPUTATION
+// ============================================================
+function onSliderBend(fingerIdx, deg){
+  deg = parseFloat(deg);
+  currentBends[fingerIdx] = deg;
+  targetBends[fingerIdx] = deg;
+  setFingerBend(fingerIdx, deg);
+}
+
+function setFingerBend(fingerIdx, deg){
+  const fj = fingerJoints[fingerIdx];
+  if(!fj) return;
+
+  const rad = (deg / 90) * (Math.PI / 2.3);
+  fj.joints.forEach((jNode, idx)=>{
+    jNode.rotation.x = rad * (idx === 0 ? 0.8 : 0.6);
+  });
+
+  // Calculate live resistance & ADC:
+  // R_flat = 25k, R_90 = 100k
+  const rFlex = 25.0 + (deg / 90.0) * 75.0; // kΩ
+  const rFixed = 10.0; // kΩ
+  const vOut = 3.3 * (rFixed / (rFlex + rFixed));
+  const rawAdc = Math.round((vOut / 3.3) * 4095);
+
+  const names = ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky'];
+  document.getElementById(`sVal${names[fingerIdx]}`).textContent = `${Math.round(deg)}° | ${rFlex.toFixed(1)}kΩ`;
+  document.getElementById(`adcR${fingerIdx}`).textContent = `${rFlex.toFixed(1)} kΩ`;
+  document.getElementById(`adcV${fingerIdx}`).textContent = `${vOut.toFixed(2)} V`;
+  document.getElementById(`adcRaw${fingerIdx}`).textContent = rawAdc;
+}
+
+// ============================================================
+// 10 FILIPINO SIGN LANGUAGE GESTURES & AUDIO
+// ============================================================
+const gestGrid = document.getElementById('gestGrid');
+let editingVocabularyId = null;
+
+function renderGestureGrid(){
+  gestGrid.textContent = '';
+  GESTURES.forEach((gesture, idx)=>{
+    const btn = document.createElement('div');
+    btn.className = 'gestBtn' + (idx === activeGestureIdx ? ' active' : '');
+    btn.id = 'gestBtn_' + idx;
+    btn.onclick = ()=> playGesture(idx);
+
+    const name = document.createElement('div');
+    name.className = 'gestName';
+    name.textContent = gesture.name;
+    const meaning = document.createElement('div');
+    meaning.className = 'gestSub';
+    meaning.textContent = gesture.en;
+    const classLabel = document.createElement('div');
+    classLabel.className = 'gestPin';
+    classLabel.textContent = `ML class: ${getClassLabel(gesture)}`;
+
+    btn.append(name, meaning, classLabel);
+    gestGrid.appendChild(btn);
+  });
+}
+
+function renderVocabularySelector(selectedId){
+  const selector = document.getElementById('vocabEntry');
+  selector.textContent = '';
+  selector.appendChild(new Option('Choose a sign to edit', ''));
+  GESTURES.forEach((gesture)=>{
+    selector.appendChild(new Option(`${gesture.name} — ${getClassLabel(gesture)}`, gesture.id));
+  });
+  selector.value = selectedId || '';
+}
+
+function loadVocabularyEntry(){
+  const id = document.getElementById('vocabEntry').value;
+  const gesture = GESTURES.find((item)=>item.id === id);
+  if(!gesture) return;
+  editingVocabularyId = gesture.id;
+  document.getElementById('vocabName').value = gesture.name;
+  document.getElementById('vocabEnglish').value = gesture.en;
+  document.getElementById('vocabClassLabel').value = getClassLabel(gesture);
+  document.getElementById('vocabFilipinoSpeech').value = gesture.speechFil || gesture.name;
+  document.getElementById('vocabEnglishSpeech').value = getEnglishSpeech(gesture);
+  setVocabularyStatus(`Editing "${gesture.name}". Set its ML class label to match the model output.`);
+}
+
+function addVocabularyEntry(){
+  editingVocabularyId = null;
+  document.getElementById('vocabEntry').value = '';
+  document.getElementById('vocabName').value = '';
+  document.getElementById('vocabEnglish').value = '';
+  document.getElementById('vocabClassLabel').value = '';
+  document.getElementById('vocabFilipinoSpeech').value = '';
+  document.getElementById('vocabEnglishSpeech').value = '';
+  setVocabularyStatus('Enter a sign, its meaning, speech phrases, and the ML class label.');
+}
+
+function saveVocabularyEntry(){
+  const name = document.getElementById('vocabName').value.trim();
+  const english = document.getElementById('vocabEnglish').value.trim();
+  const classLabel = document.getElementById('vocabClassLabel').value.trim();
+  const speechFil = document.getElementById('vocabFilipinoSpeech').value.trim();
+  const speechEn = document.getElementById('vocabEnglishSpeech').value.trim();
+  if(!name || !english || !classLabel || !speechFil || !speechEn){
+    setVocabularyStatus('Complete all five fields before saving.');
+    return;
+  }
+
+  const existing = GESTURES.find((gesture)=>getClassLabel(gesture).toLowerCase() === classLabel.toLowerCase());
+  if(existing && existing.id !== editingVocabularyId){
+    setVocabularyStatus(`The ML class label "${classLabel}" is already assigned to "${existing.name}".`);
+    return;
+  }
+
+  let gesture = GESTURES.find((item)=>item.id === editingVocabularyId);
+  if(!gesture){
+    gesture = {
+      id: `custom-${Date.now()}-${GESTURES.length}`,
+      classLabel,
+      name,
+      en: english,
+      speechFil,
+      speechEn,
+      bends: [0, 0, 0, 0, 0],
+      pitch: 0,
+      roll: 0,
+      custom: true
+    };
+    GESTURES.push(gesture);
+  } else {
+    gesture.classLabel = classLabel;
+    gesture.name = name;
+    gesture.en = english;
+    gesture.speechFil = speechFil;
+    gesture.speechEn = speechEn;
+  }
+
+  editingVocabularyId = gesture.id;
+  if(!saveGestureVocabulary()) return;
+  renderGestureGrid();
+  renderVocabularySelector(gesture.id);
+  loadVocabularyEntry();
+  setVocabularyStatus(`Saved "${gesture.name}" and its ML class mapping in this browser.`);
+}
+
+function applyModelPrediction(classLabel){
+  if(typeof classLabel !== 'string' || !classLabel.trim()){
+    setVocabularyStatus('The model must provide a non-empty class label.');
+    return false;
+  }
+  const normalizedLabel = classLabel.trim().toLowerCase();
+  const idx = GESTURES.findIndex((gesture)=>getClassLabel(gesture).trim().toLowerCase() === normalizedLabel);
+  if(idx < 0){
+    setVocabularyStatus(`No sign mapping found for model class "${classLabel}". Add it to the vocabulary first.`);
+    serialLog(`[ML] Unmapped class label: "${classLabel}"`, 'w');
+    return false;
+  }
+  playGesture(idx);
+  document.getElementById('hudConf').textContent = `ML: ${getClassLabel(GESTURES[idx])}`;
+  return true;
+}
+
+renderGestureGrid();
+renderVocabularySelector(GESTURES[0].id);
+loadVocabularyEntry();
+
+function playGesture(idx, speakOutput = true){
+  if(!isPowered){
+    serialLog('[WARN] System is OFF. Power switch must be turned ON.', 'w');
+    return;
+  }
+  activeGestureIdx = idx;
+  document.querySelectorAll('.gestBtn').forEach((b, i)=> b.classList.toggle('active', i === idx));
+
+  const g = GESTURES[idx];
+  document.getElementById('hudGesture').textContent = `${g.name} (${g.en})`;
+  document.getElementById('hudConf').textContent = 'Preset demo';
+  document.getElementById('hudIMU').textContent = `P: ${g.pitch}° | R: ${g.roll}°`;
+
+  // Set target bends for smooth animation (animate loop will lerp)
+  g.bends.forEach((deg, fi)=>{
+    targetBends[fi] = deg;
+    const rng = document.getElementById(['rngThumb','rngIndex','rngMiddle','rngRing','rngPinky'][fi]);
+    if(rng) rng.value = deg;
+  });
+
+  if(speakOutput && document.getElementById('autoSpeak').checked) speakCurrentGesture();
+  triggerSpeakerVibration();
+
+  // Log the selected demo output.
+  serialLog(`[Gesture Demo] Selected: "${g.name}" (${g.en})`, 't');
+}
+
+let activeSpeechAudio = null;
+let activeSpeechAudioUrl = null;
+let speechRequestId = 0;
+
+function stopSpeechPlayback(){
+  speechRequestId++;
+  if('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if(activeSpeechAudio){
+    activeSpeechAudio.pause();
+    activeSpeechAudio.src = '';
+    activeSpeechAudio = null;
+  }
+  if(activeSpeechAudioUrl){
+    URL.revokeObjectURL(activeSpeechAudioUrl);
+    activeSpeechAudioUrl = null;
+  }
+}
+
+function speakCurrentGesture(){
+  const status = document.getElementById('ttsStatus');
+  const isOnline = document.getElementById('ttsEngine').value === 'azure';
+  const language = isOnline ? 'fil-PH' : document.getElementById('ttsLanguage').value;
+  const gesture = GESTURES[activeGestureIdx];
+  const rawText = language === 'fil-PH' ? (gesture.speechFil || gesture.name) : getEnglishSpeech(gesture);
+  const text = prepareSpeechText(rawText);
+  stopSpeechPlayback();
+
+  if(isOnline){
+    speakOnlineFilipino(text, speechRequestId);
+    return;
+  }
+  if(!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)){
+    status.textContent = 'Offline text-to-speech is not supported by this browser.';
+    return;
+  }
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = language;
+  utterance.rate = 0.93;
+  utterance.pitch = 1.02;
+  utterance.volume = 1;
+
+  const voices = window.speechSynthesis.getVoices();
+  const selectedVoice = document.getElementById('ttsVoice').value;
+  const voice = voices.find((candidate)=>getSpeechVoiceKey(candidate) === selectedVoice);
+  if(voice) utterance.voice = voice;
+
+  utterance.onend = ()=>{
+    if(utterance === activeUtterance) status.textContent = `Spoken: ${text}`;
+  };
+  utterance.onerror = (event)=>{
+    if(utterance !== activeUtterance || event.error === 'interrupted' || event.error === 'canceled') return;
+    status.textContent = `Speech failed: ${event.error}. Check your browser's speech settings.`;
+  };
+
+  window.speechSynthesis.cancel();
+  activeUtterance = utterance;
+  status.textContent = voice
+    ? `Speaking with ${voice.name}...`
+    : `No ${language} voice is installed; trying the device default voice...`;
+  window.speechSynthesis.speak(utterance);
+}
+
+async function speakOnlineFilipino(text, requestId){
+  const status = document.getElementById('ttsStatus');
+  if(window.location.protocol === 'file:'){
+    status.textContent = 'Online speech needs the local server. Run python serve_app.py and open http://127.0.0.1:8000.';
+    return;
+  }
+  const voice = document.getElementById('onlineVoice').value;
+  if(!voice){
+    status.textContent = 'Choose an available Filipino neural voice first.';
+    return;
+  }
+  status.textContent = 'Requesting Filipino neural speech from Azure Speech...';
+  try{
+    const response = await fetch('/api/tts', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text, voice})
+    });
+    if(!response.ok){
+      let detail = `Online speech failed (HTTP ${response.status}).`;
+      try{
+        const error = await response.json();
+        if(error.error) detail = error.error;
+      }catch(parseError){
+        detail = `Online speech failed (HTTP ${response.status}); the local server returned an invalid response.`;
+      }
+      throw new Error(detail);
+    }
+    const audioBlob = await response.blob();
+    if(requestId !== speechRequestId) return;
+    activeSpeechAudioUrl = URL.createObjectURL(audioBlob);
+    activeSpeechAudio = new Audio(activeSpeechAudioUrl);
+    activeSpeechAudio.onended = ()=>{
+      if(requestId !== speechRequestId) return;
+      status.textContent = `Spoken with ${voice}.`;
+      stopSpeechPlayback();
+    };
+    activeSpeechAudio.onerror = ()=>{
+      if(requestId === speechRequestId) status.textContent = 'Could not play the audio returned by Azure Speech.';
+    };
+    await activeSpeechAudio.play();
+    if(requestId === speechRequestId) status.textContent = `Speaking with ${voice} (online)...`;
+  }catch(error){
+    if(requestId === speechRequestId) status.textContent = `Online speech failed: ${error.message}`;
+  }
+}
+
+function prepareSpeechText(text){
+  let phrase = text.trim();
+  const separator = phrase.indexOf(' / ');
+  if(separator >= 0){
+    const first = phrase.slice(0, separator);
+    const second = phrase.slice(separator + 3);
+    phrase = `${first}, ${second.charAt(0).toLowerCase()}${second.slice(1)}`;
+  }
+  if(phrase && !'.!?'.includes(phrase.charAt(phrase.length - 1))){
+    phrase += phrase.toLowerCase().includes('how are you') ? '?' : '.';
+  }
+  return phrase;
+}
+
+function getSpeechVoiceKey(voice){
+  return voice.voiceURI || `${voice.name}::${voice.lang}`;
+}
+
+function updateTtsVoices(){
+  if(document.getElementById('ttsEngine').value === 'azure') return;
+  if(!('speechSynthesis' in window)) return;
+  const selector = document.getElementById('ttsVoice');
+  const language = document.getElementById('ttsLanguage').value;
+  const prefix = language.split('-')[0].toLowerCase();
+  const voices = window.speechSynthesis.getVoices();
+  const matching = voices.filter((voice)=>voice.lang.toLowerCase().startsWith(prefix + '-'));
+  const previous = selector.value;
+  selector.textContent = '';
+
+  if(!matching.length){
+    selector.appendChild(new Option('No matching voice (device default)', ''));
+    document.getElementById('ttsStatus').textContent =
+      `No ${language} voice is installed. Add a matching voice in system speech settings for better pronunciation.`;
+    return;
+  }
+
+  matching.forEach((voice)=>{
+    selector.appendChild(new Option(`${voice.name} (${voice.lang})`, getSpeechVoiceKey(voice)));
+  });
+
+  const retained = matching.find((voice)=>getSpeechVoiceKey(voice) === previous);
+  const preferred = retained
+    || matching.find((voice)=>voice.name.toLowerCase().includes('natural') || voice.name.toLowerCase().includes('neural'))
+    || matching.find((voice)=>voice.name.toLowerCase().includes('zira'))
+    || matching.find((voice)=>voice.default)
+    || matching[0];
+  selector.value = getSpeechVoiceKey(preferred);
+  document.getElementById('ttsStatus').textContent = `Selected voice: ${preferred.name}.`;
+}
+
+function updateTtsEngine(){
+  const isOnline = document.getElementById('ttsEngine').value === 'azure';
+  document.getElementById('ttsLanguage').disabled = isOnline;
+  document.getElementById('deviceVoiceRow').style.display = isOnline ? 'none' : '';
+  document.getElementById('onlineVoiceRow').style.display = isOnline ? '' : 'none';
+  if(isOnline){
+    document.getElementById('ttsLanguage').value = 'fil-PH';
+    loadOnlineFilipinoVoices();
+  }else{
+    updateTtsVoices();
+  }
+}
+
+async function loadOnlineFilipinoVoices(){
+  const selector = document.getElementById('onlineVoice');
+  const status = document.getElementById('ttsStatus');
+  selector.textContent = '';
+  if(window.location.protocol === 'file:'){
+    status.textContent = 'Online speech needs the local server. Run python serve_app.py and open http://127.0.0.1:8000.';
+    return;
+  }
+  status.textContent = 'Checking Azure Filipino neural voices...';
+  try{
+    const response = await fetch('/api/tts-voices');
+    const result = await response.json();
+    if(!response.ok) throw new Error(result.error || `Voice lookup failed (HTTP ${response.status}).`);
+    result.voices.forEach((voice)=>{
+      selector.appendChild(new Option(`${voice.name} (${voice.gender})`, voice.shortName));
+    });
+    if(!result.voices.length){
+      status.textContent = 'Azure Speech did not report any Filipino neural voices for this region.';
+      return;
+    }
+    status.textContent = `Online Filipino neural voices ready: ${result.voices.length} available.`;
+  }catch(error){
+    status.textContent = `Filipino neural voices unavailable: ${error.message}`;
+  }
+}
+
+function triggerSpeakerVibration(){
+  speakerVibTimer = 18; // frames
+}
+
+function serialLog(msg, type){
+  const c = document.getElementById('serialConsole');
+  if(!c) return;
+  const line = document.createElement('div');
+  line.className = 'logLine' + (type ? ' ' + type : '');
+  line.textContent = msg;
+  c.appendChild(line);
+  c.scrollTop = c.scrollHeight;
+}
+
+// ============================================================
+// COMPONENT INSPECTION & HOVER RAYCASTING
+// ============================================================
+const tooltip = document.getElementById('tooltip');
+const tTitle = document.getElementById('tTitle');
+
+function onPointerMove(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const targets = [];
+  allInteractables.forEach(it=>{
+    it.mesh.traverse(c=>{ if(c.isMesh) targets.push(c); });
+  });
+
+  const hits = raycaster.intersectObjects(targets, false);
+  if(hits.length > 0){
+    let hitMesh = hits[0].object;
+    let found = null;
+    allInteractables.forEach(it=>{
+      it.mesh.traverse(c=>{ if(c === hitMesh) found = it; });
+    });
+
+    if(found && COMP_DATA[found.id]){
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX - rect.left + 14) + 'px';
+      tooltip.style.top = (e.clientY - rect.top - 12) + 'px';
+      tTitle.textContent = COMP_DATA[found.id].name;
+      hoveredObj = found;
+      document.body.style.cursor = 'pointer';
+      return;
+    }
+  }
+  tooltip.style.display = 'none';
+  hoveredObj = null;
+  document.body.style.cursor = 'default';
+}
+
+function onPointerClick(e){
+  if(hoveredObj){
+    selectComponent(hoveredObj.id);
+    const worldPos = new THREE.Vector3();
+    hoveredObj.mesh.getWorldPosition(worldPos);
+    flyTo(worldPos, 0.16);
+  }
+}
+
+renderer.domElement.addEventListener('pointermove', onPointerMove);
+renderer.domElement.addEventListener('click', onPointerClick);
+
+function selectComponent(id){
+  selectedCompId = id;
+  const d = COMP_DATA[id];
+  if(!d) return;
+
+  switchTab('tabInspect');
+
+  document.getElementById('compTitle').textContent = d.name;
+  document.getElementById('compSub').textContent = d.sub;
+  document.getElementById('compRole').textContent = d.role;
+  document.getElementById('compBadge').textContent = 'BOM: ' + d.qty;
+
+  const tbl = document.getElementById('specTable');
+  tbl.innerHTML = '';
+  for(let k in d.specs){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="k">${k}</td><td class="v">${d.specs[k]}</td>`;
+    tbl.appendChild(tr);
+  }
+
+  document.querySelectorAll('.compPill').forEach(p=>{
+    p.classList.toggle('active', p.getAttribute('onclick').includes(`'${id}'`));
+  });
+}
+
+function switchTab(tabId){
+  document.querySelectorAll('.tabPane').forEach(p=> p.classList.remove('active'));
+  document.querySelectorAll('.tabBtn').forEach(b=> b.classList.remove('active'));
+
+  const p = document.getElementById(tabId);
+  if(p) p.classList.add('active');
+
+  const idx = ['tabInspect', 'tabSensors', 'tabGestures', 'tabLayers'].indexOf(tabId);
+  const btns = document.querySelectorAll('.tabBtn');
+  if(btns[idx]) btns[idx].classList.add('active');
+}
+
+function toggleSidebar(){
+  const sb = document.getElementById('sidebar');
+  sb.classList.toggle('collapsed');
+}
+
+function toggleLayer(layerName, visible){
+  const groups = {
+    glove: gloveGroup, components: compGroup,
+    wiring: wireGroup, mount: mountGroup, enclosure: enclosureGroup, sensors: sensorGroup
+  };
+  if(groups[layerName]) groups[layerName].visible = visible;
+}
+
+// Initial Selection & View
+updateTtsVoices();
+if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = updateTtsVoices;
+selectComponent('esp32');
+// Set initial gesture immediately (no animation for the first pose)
+playGesture(0, false);
+currentBends = [...GESTURES[0].bends];
+GESTURES[0].bends.forEach((deg, fi) => setFingerBend(fi, deg));
+setView('hero');
+
+// ============================================================
+// MAIN RENDER LOOP
+// ============================================================
+let statusBlinkTimer = 0;
+
+function animate(time){
+  requestAnimationFrame(animate);
+
+  controls.update();
+
+  // Smooth rotation & position interpolation for orientation toggle
+  mainGloveGroup.rotation.x += (targetGroupRot.x - mainGloveGroup.rotation.x) * 0.08;
+  mainGloveGroup.rotation.y += (targetGroupRot.y - mainGloveGroup.rotation.y) * 0.08;
+  mainGloveGroup.rotation.z += (targetGroupRot.z - mainGloveGroup.rotation.z) * 0.08;
+  mainGloveGroup.position.y += (targetGroupPos.y - mainGloveGroup.position.y) * 0.08;
+
+  // Smooth finger bend animation (lerp currentBends toward targetBends)
+  const sliderNames = ['rngThumb','rngIndex','rngMiddle','rngRing','rngPinky'];
+  for(let fi = 0; fi < 5; fi++){
+    const diff = targetBends[fi] - currentBends[fi];
+    if(Math.abs(diff) > BEND_SNAP_THRESHOLD){
+      currentBends[fi] += diff * BEND_LERP_SPEED;
+      setFingerBend(fi, currentBends[fi]);
+      // Animate slider knob in sync
+      const rng = document.getElementById(sliderNames[fi]);
+      if(rng) rng.value = Math.round(currentBends[fi]);
+    } else if(Math.abs(diff) > 0.001){
+      // Final snap
+      currentBends[fi] = targetBends[fi];
+      setFingerBend(fi, currentBends[fi]);
+      const rng = document.getElementById(sliderNames[fi]);
+      if(rng) rng.value = Math.round(currentBends[fi]);
+    }
+  }
+
+  updateExplodeAnimation();
+
+  // Speaker cone physical vibration oscillation
+  if(speakerVibTimer > 0){
+    speakerVibTimer--;
+    if(speakerMesh){
+      speakerMesh.position.y = 0.0022 + Math.sin(time * 0.1) * 0.0006;
+    }
+  } else if(speakerMesh){
+    speakerMesh.position.y = 0.0022;
+  }
+
+  // Blinking Status LED
+  if(isPowered && ledMeshes.status){
+    statusBlinkTimer++;
+    if(statusBlinkTimer % 45 === 0){
+      ledMeshes.status.visible = !ledMeshes.status.visible;
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+// Window resize handling
+window.addEventListener('resize', ()=>{
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+</script>
+</body>
+</html>
+'''
+
+project_dir = os.path.dirname(os.path.abspath(__file__))
+output_path = os.path.join(project_dir, 'smart_glove_3d_viewer.html')
+index_path = os.path.join(project_dir, 'index.html')
+
+with open(output_path, 'w', encoding='utf-8') as f:
+    f.write(html_content)
+
+shutil.copyfile(output_path, index_path)
+
+print(f"Successfully generated {output_path} ({len(html_content)} bytes)")
+print(f"Copied to {index_path}")
